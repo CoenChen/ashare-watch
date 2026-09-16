@@ -184,6 +184,15 @@ button.loading::after {
   color: #f5d99a; background: rgba(245, 158, 11, .08);
   border: 1px solid rgba(245, 158, 11, .25);
 }
+.warnings .warn.share {
+  color: #cbd5f5; background: rgba(129, 140, 248, .1);
+  border-color: rgba(129, 140, 248, .3);
+}
+.warnings .warn.share b { color: #fff; }
+.warnings .warn.share.stale {
+  color: #f5d99a; background: rgba(245, 158, 11, .1);
+  border-color: rgba(245, 158, 11, .35);
+}
 
 /* ------------------------------------------------------------------ 布局 */
 .layout {
@@ -191,10 +200,15 @@ button.loading::after {
   max-width: 1720px; margin: 0 auto;
   padding: 20px 26px 60px;
   display: grid; gap: 18px;
+  /* 关键：grid 轨道的默认最小尺寸是 auto，会被子元素的固有宽度（比如
+     排行表格）撑破，在手机上表现为整页横向滚动。显式写成 minmax(0, 1fr)
+     才能让「子元素自己滚动」而不是「把整页撑宽」。 */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .panel {
   position: relative;
+  min-width: 0;   /* 同上：作为 grid/flex 子项时默认不能被压缩，必须显式放开 */
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
@@ -223,7 +237,13 @@ button.loading::after {
 .chip.ghost { background: transparent; color: var(--muted); }
 
 /* ------------------------------------------------------------ 指数主卡 */
-.index-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(248px, 1fr)); gap: 16px; }
+.index-row {
+  display: grid;
+  /* min(248px, 100%) 保证最小列宽永远不会超过容器本身——
+     否则窄屏上 auto-fit 算不出 1 列，直接把容器撑宽。 */
+  grid-template-columns: repeat(auto-fit, minmax(min(248px, 100%), 1fr));
+  gap: 16px;
+}
 
 .index-card {
   position: relative; overflow: hidden;
@@ -286,7 +306,7 @@ button.loading::after {
 .breadth-legend b { font-family: var(--mono); color: var(--text); }
 
 .mini-stats {
-  display: grid; grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(min(118px, 100%), 1fr));
   gap: 10px; margin-top: 13px; padding-top: 12px;
   border-top: 1px dashed var(--border);
 }
@@ -295,7 +315,11 @@ button.loading::after {
 .mini-stat .v { font-family: var(--mono); font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
 
 /* ------------------------------------------------------------ 涨跌停 */
-.limit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(104px, 1fr)); gap: 10px; }
+.limit-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(104px, 100%), 1fr));
+  gap: 10px;
+}
 .limit-cell {
   padding: 11px 13px; border-radius: var(--r-md);
   border: 1px solid var(--border); background: var(--panel-2);
@@ -311,6 +335,7 @@ button.loading::after {
 
 /* -------------------------------------------------------------- 双栏 */
 .grid-2 { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; }
+.grid-2 > * { min-width: 0; }
 @media (max-width: 1180px) { .grid-2 { grid-template-columns: minmax(0, 1fr); } }
 
 /* ------------------------------------------------------------ 走势图 */
@@ -345,7 +370,11 @@ button.loading::after {
 .sector-list::-webkit-scrollbar-thumb { background: rgba(148, 140, 180, .2); border-radius: 4px; }
 
 /* ------------------------------------------------------------ 自选股 */
-.watch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(178px, 1fr)); gap: 11px; }
+.watch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(178px, 100%), 1fr));
+  gap: 11px;
+}
 .watch-card {
   position: relative; padding: 12px 14px;
   border-radius: var(--r-md); border: 1px solid var(--border);
@@ -386,7 +415,9 @@ button.loading::after {
 .tab.active { color: #180a10; font-weight: 700; background: var(--brand-grad); }
 
 .table-wrap { overflow-x: auto; }
-.rank-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* 表格给一个最小宽度，窄屏时由外层 .table-wrap 横向滚动，
+   而不是把整个页面撑宽。 */
+.rank-table { width: 100%; min-width: 540px; border-collapse: collapse; font-size: 13px; }
 .rank-table th {
   text-align: left; padding: 9px 12px; font-size: 11.5px; font-weight: 600;
   color: var(--muted); border-bottom: 1px solid var(--border); white-space: nowrap;
@@ -416,6 +447,13 @@ button.loading::after {
   .topbar { padding: 12px 14px; }
   .layout { padding: 16px 14px 50px; }
   .index-value { font-size: 24px; }
-  .sector-row { grid-template-columns: 84px 1fr 58px; }
+  /* 窄屏下窄化首列，给中间的条形图留出空间 */
+  .sector-row { grid-template-columns: 78px minmax(0, 1fr) 56px; gap: 8px; }
+  /* 顶部状态条在手机上一行放不下，让它换行并压缩内边距 */
+  .status-strip { gap: 8px; }
+  .badge { padding: 4px 10px; font-size: 12px; }
+  .stamp strong { font-size: 11.5px; }
+  .chart { height: 220px; }
+  .panel { padding: 15px 16px; }
+  .panel-head { gap: 8px; }
 }
-

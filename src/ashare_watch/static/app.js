@@ -424,8 +424,8 @@ async function load({ silent = false } = {}) {
 
 function updateCountdown() {
   if (state.standalone) {
-    $("next-label").textContent = "模式";
-    $("countdown").textContent = "离线快照";
+    $("next-label").textContent = "页面类型";
+    $("countdown").textContent = "静态快照";
     return;
   }
   const el = $("countdown");
@@ -435,6 +435,38 @@ function updateCountdown() {
   }
   const m = Math.floor(state.secondsLeft / 60), s = state.secondsLeft % 60;
   el.textContent = m > 0 ? `${m} 分 ${String(s).padStart(2, "0")} 秒` : `${s} 秒`;
+}
+
+/** 静态托管（分享出去）时的顶部提示条。
+ *
+ *  这一条不是装饰，是必要的：别人通过链接打开时，看到的是**导出那一刻**的
+ *  行情。如果页面上没有任何说明，很容易被当成实时数据使用。
+ *  所以这里明确写出数据时间，并在数据较旧时加粗提醒。
+ */
+function renderShareBanner(snapshot) {
+  const host = $("share-banner");
+  if (!host) return;
+  const fetched = (snapshot.fetched_at || "").replace("T", " ").slice(0, 19);
+  let staleMinutes = null;
+  if (snapshot.fetched_at) {
+    const ts = new Date(snapshot.fetched_at).getTime();
+    if (!Number.isNaN(ts)) staleMinutes = Math.round((Date.now() - ts) / 60000);
+  }
+  const stale = staleMinutes !== null && staleMinutes > 60;
+  const ageText =
+    staleMinutes === null
+      ? ""
+      : staleMinutes < 1
+      ? "（刚刚生成）"
+      : staleMinutes < 60
+      ? `（${staleMinutes} 分钟前生成）`
+      : `（${Math.floor(staleMinutes / 60)} 小时前生成，数据可能已过期）`;
+
+  host.hidden = false;
+  host.innerHTML = `<div class="warn share${stale ? " stale" : ""}">
+    这是 <b>${esc(fetched)}</b> 的行情快照${esc(ageText)}。
+    本页为静态页面，<b>不会自动更新</b>——想看实时行情请在本机运行项目。
+  </div>`;
 }
 
 /* --------------------------------------------------------------- 交互 */
@@ -494,8 +526,9 @@ if (window.__SNAPSHOT__) {
   state.standalone = true;
   $("refresh-btn").style.display = "none";
   $("export-btn").style.display = "none";
-  $("subtitle").textContent = "离线快照 · 数据时间 " + (window.__SNAPSHOT__.fetched_at || "").slice(0, 19);
+  $("subtitle").textContent = "行情快照 · 静态页面";
   render(window.__SNAPSHOT__);
+  renderShareBanner(window.__SNAPSHOT__);
   updateCountdown();
 } else {
   load();
@@ -505,4 +538,3 @@ if (window.__SNAPSHOT__) {
     updateCountdown();
   }, 1_000);
 }
-
