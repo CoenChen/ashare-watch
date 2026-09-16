@@ -1,0 +1,72 @@
+"""把当前数据导出成**单文件 HTML**。
+
+这是最省事的形态：双击就能在浏览器打开，不需要装 Python、不需要开服务、
+不需要联网。样式、脚本、数据全部内联在一个文件里，可以直接发给别人。
+
+实现上复用同一套前端模板（``static/``），把外链的 CSS 与 JS 替换成内联内容。
+这样线上服务和离线快照永远是同一份界面代码，不会出现"改了网页忘了改导出"。
+"""
+
+from __future__ import annotations
+
+import json
+import re
+from datetime import datetime
+from pathlib import Path
+
+from ashare_watch.config import Settings, get_settings
+
+STATIC_DIR = Path(__file__).parent / "static"
+
+
+def _read_static(name: str) -> str:
+    path = STATIC_DIR / name
+    if not path.exists():
+        raise FileNotFoundError(f"缺少前端资源：{path}")
+    return path.read_text(encoding="utf-8")
+
+
+def build_standalone_html(snapshot: dict, *, title: str = "A 股实时行情") -> str:
+    html = _read_static("index.html")
+    css = _read_static("styles.css")
+    js = _read_static("app.js")
+
+    html = re.sub(
+        r'<link[^>]*href="/static/styles\.css"[^>]*/?>',
+        f"<style>\n{css}\n</style>",
+        html,
+    )
+    html = re.sub(
+        r'<script[^>]*src="/static/app\.js"[^>]*></script>',
+        f"<script>\n{js}\n</script>",
+        html,
+    )
+
+    payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
+    # 数据里可能出现 "</script>"，必须打散，否则会提前闭合脚本标签
+    payload = payload.replace("</", "<\\/")
+    html = html.replace(
+        "<script>",
+        f"<script>window.__SNAPSHOT__ = {payload};</script>\n<script>",
+        1,
+    )
+    html = html.replace(
+        "<title>A 股实时行情</title>",
+        f"<title>{title} · {snapshot.get('fetched_at', '')}</title>",
+    )
+    html = html.replace(
+        "</body>",
+        f"<!-- 导出于 {datetime.now().astimezone().isoformat(timespec='seconds')} "
+        f"· 数据时间 {snapshot.get('fetched_at', '')} -->\n</body>",
+        1,
+    )
+    return html
+
+
+def export_snapshot(snapshot: dict, settings: Settings | None = None) -> Path:
+    settings = settings or get_settings()
+    settings.ensure_dirs()
+    target = settings.export_path
+    target.write_text(build_standalone_html(snapshot), encoding="utf-8")
+    return target
+

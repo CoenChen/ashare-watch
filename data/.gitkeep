@@ -1,0 +1,6 @@
+# 运行期数据目录。首次启动时自动生成：
+#   market.sqlite3   快照历史 + 采集日志
+#   exports/         导出的单文件 HTML 快照
+#   watch.log        运行日志
+# 这些文件都已在 .gitignore 中忽略，不会被提交。
+

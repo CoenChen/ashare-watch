@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.pytest_cache/
+.pytest-tmp/
+
+# 运行期数据全部忽略。整个 data/ 都是本地运行产物，不该进版本库。
+data/*
+!data/.gitkeep
+

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>A 股实时行情</title>
+<link rel="stylesheet" href="/static/styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%230d0a14'/><path d='M6 23l6-11 4.5 6L20 13l6 10z' fill='%23ef4444'/><circle cx='24' cy='9' r='2.6' fill='%23f59e0b'/></svg>" />
+</head>
+<body>
+<div class="bg-decor" aria-hidden="true">
+  <span class="glow glow-a"></span>
+  <span class="glow glow-b"></span>
+  <span class="grid-lines"></span>
+</div>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 32 32" width="24" height="24">
+        <path d="M6 23l6-11 4.5 6L20 13l6 10z" fill="currentColor"/>
+      </svg>
+    </span>
+    <div class="brand-text">
+      <h1>A 股实时行情</h1>
+      <p id="subtitle">数据来源 新浪财经公开接口 · 本地抓取</p>
+    </div>
+  </div>
+
+  <div class="status-strip">
+    <span id="market-badge" class="badge unknown">
+      <i class="dot"></i><span id="market-label">状态未知</span>
+    </span>
+    <span class="stamp">
+      <span class="stamp-label">数据时间</span>
+      <strong id="fetched-at">—</strong>
+    </span>
+    <span class="stamp">
+      <span class="stamp-label" id="next-label">下次刷新</span>
+      <strong id="countdown">—</strong>
+    </span>
+    <button id="refresh-btn" class="ghost-btn" title="立即重新抓取">立即刷新</button>
+    <button id="export-btn" class="ghost-btn" title="导出为可离线打开的单文件 HTML">导出快照</button>
+  </div>
+</header>
+
+<div id="warnings" class="warnings"></div>
+
+<main class="layout">
+  <!-- 指数主卡 -->
+  <section id="index-cards" class="index-row"></section>
+
+  <!-- 市场宽度 + 涨跌停统计（A 股最有信息量的两个情绪指标） -->
+  <div class="grid-2">
+    <section class="panel">
+      <div class="panel-head">
+        <h3>市场宽度 <span class="sub">全市场涨跌家数</span></h3>
+        <span class="chip" id="breadth-total">—</span>
+      </div>
+      <div class="breadth-bar" id="breadth-bar"></div>
+      <div class="breadth-legend">
+        <span class="up"><i></i>上涨 <b id="breadth-up">—</b></span>
+        <span class="flat"><i></i>平盘 <b id="breadth-flat">—</b></span>
+        <span class="down"><i></i>下跌 <b id="breadth-down">—</b></span>
+      </div>
+      <div class="mini-stats" id="mini-stats"></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-head">
+        <h3>涨跌停统计 <span class="sub">A 股短线情绪的核心指标</span></h3>
+        <span class="chip ghost" id="limit-sample">—</span>
+      </div>
+      <div id="limit-grid" class="limit-grid"></div>
+      <p class="limit-note">
+        涨停家数反映资金进攻意愿，跌停家数反映恐慌程度；一字涨停说明有资金抢筹，
+        炸板说明封板不牢。主板 ±10%、创业板与科创板 ±20%、北交所 ±30%。
+      </p>
+    </section>
+  </div>
+
+  <div class="grid-2">
+    <!-- 指数走势 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3>上证指数走势 <span class="sub">日线收盘</span></h3>
+        <div class="range-tabs" id="range-tabs">
+          <button class="range active" data-days="30">1 月</button>
+          <button class="range" data-days="60">3 月</button>
+          <button class="range" data-days="120">6 月</button>
+          <button class="range" data-days="250">1 年</button>
+        </div>
+      </div>
+      <div id="history-chart" class="chart"></div>
+    </section>
+
+    <!-- 行业板块 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3>行业板块 <span class="sub">官方行业分类涨跌幅</span></h3>
+        <span class="chip ghost" id="sector-count">—</span>
+      </div>
+      <div id="sector-list" class="sector-list"></div>
+    </section>
+  </div>
+
+  <!-- 自选股 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h3>自选股 <span class="sub" id="watchlist-count">—</span></h3>
+      <span class="chip ghost">在 .env 里修改 ASHARE_WATCH_SYMBOLS 自定义</span>
+    </div>
+    <div id="watchlist" class="watch-grid"></div>
+  </section>
+
+  <!-- 榜单 -->
+  <section class="panel">
+    <div class="panel-head">
+      <h3>市场榜单</h3>
+      <nav class="tabs" id="rank-tabs">
+        <button class="tab active" data-key="gainers">涨幅榜</button>
+        <button class="tab" data-key="losers">跌幅榜</button>
+        <button class="tab" data-key="most_active">成交额榜</button>
+        <button class="tab" data-key="turnover_leaders">换手率榜</button>
+      </nav>
+    </div>
+    <div class="table-wrap">
+      <table class="rank-table">
+        <thead>
+          <tr>
+            <th class="col-idx">#</th>
+            <th>代码 / 名称</th>
+            <th class="num">最新价</th>
+            <th class="num">涨跌额</th>
+            <th class="num">涨跌幅</th>
+            <th class="num">成交额</th>
+            <th class="num">换手率</th>
+          </tr>
+        </thead>
+        <tbody id="rank-body"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <span>数据抓取自公开行情接口，仅供个人学习与研究使用，不构成任何投资建议。</span>
+    <span id="foot-meta"></span>
+  </footer>
+</main>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
+
