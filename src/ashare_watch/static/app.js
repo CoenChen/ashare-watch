@@ -433,6 +433,135 @@ function render(snapshot) {
   renderRank();
 }
 
+/* ---------------------------------------------------------------- 搜索
+ *
+ *  在全市场 5500+ 只里本地过滤，不发任何请求。
+ *  索引是精简数组，字段顺序固定为：
+ *    [代码, 名称, 现价, 涨跌幅, 换手率, 成交额(万元)]
+ *  用数组而不是对象是为了压体积（对象写法要 500KB+，数组只要 200 多 KB）。
+ *
+ *  因为是纯本地过滤，**静态分享页面里也能用**。
+ */
+let searchIndex = null;
+const SEARCH_LIMIT = 12;
+
+function boardName(code) {
+  if (/^(688|689)/.test(code)) return "科创板";
+  if (/^(300|301|302)/.test(code)) return "创业板";
+  if (/^(8|4|92)/.test(code)) return "北交所";
+  return "主板";
+}
+
+function searchStocks(query) {
+  const raw = query.trim();
+  if (!raw || !searchIndex) return [];
+  const lower = raw.toLowerCase();
+  const hits = [];
+  for (const row of searchIndex) {
+    const code = row[0];
+    const name = row[1];
+    // 打分：代码精确 > 代码前缀 > 名称前缀 > 代码包含 > 名称包含
+    let score = 0;
+    if (code === lower) score = 100;
+    else if (code.startsWith(lower)) score = 80;
+    else if (name.startsWith(raw)) score = 70;
+    else if (code.includes(lower)) score = 50;
+    else if (name.includes(raw)) score = 40;
+    if (score) hits.push({ score, row });
+  }
+  hits.sort((a, b) => b.score - a.score);
+  return hits.slice(0, SEARCH_LIMIT).map((hit) => hit.row);
+}
+
+function renderSearchResults(rows, query) {
+  const host = $("search-results");
+  const clear = $("search-clear");
+  if (!query.trim()) {
+    host.hidden = true;
+    host.innerHTML = "";
+    clear.hidden = true;
+    return;
+  }
+  clear.hidden = false;
+  host.hidden = false;
+
+  if (!searchIndex) {
+    host.innerHTML = '<div class="search-empty">搜索索引还在加载…</div>';
+    return;
+  }
+  if (!rows.length) {
+    host.innerHTML = `<div class="search-empty">没有找到匹配「${esc(query)}」的股票</div>`;
+    return;
+  }
+
+  const body = rows
+    .map((row) => {
+      const [code, name, price, pctValue, turnover, amountWan] = row;
+      const d =
+        pctValue === null || pctValue === undefined
+          ? "flat"
+          : pctValue > 0.0001 ? "up" : pctValue < -0.0001 ? "down" : "flat";
+      const turn =
+        turnover === null || turnover === undefined ? "—" : turnover.toFixed(2) + "%";
+      return `<div class="search-row">
+        <span class="sr-code ${dirClass(d)}">${esc(code)}</span>
+        <span class="sr-name">${esc(name)}<em>${boardName(code)}</em></span>
+        <span class="sr-price ${dirClass(d)}">${num(price)}</span>
+        <span class="sr-pct ${dirClass(d)}">${pct(pctValue)}</span>
+        <span class="sr-meta">${turn} · ${money((amountWan || 0) * 10000)}</span>
+      </div>`;
+    })
+    .join("");
+  const more =
+    rows.length >= SEARCH_LIMIT
+      ? '<div class="search-more">只显示前 12 条，输入更具体的关键词试试</div>'
+      : "";
+  host.innerHTML = body + more;
+}
+
+function onSearchInput() {
+  const query = $("search-input").value;
+  renderSearchResults(searchStocks(query), query);
+}
+
+async function loadSearchIndex() {
+  // 静态分享页：索引已内联在页面里，直接用，不产生任何请求
+  if (window.__SEARCH_INDEX__) {
+    searchIndex = window.__SEARCH_INDEX__;
+    return;
+  }
+  try {
+    const response = await fetch("/api/search-index", { cache: "no-store" });
+    searchIndex = (await response.json()).rows || [];
+  } catch (error) {
+    searchIndex = null; // 搜索不可用不该影响其它功能
+  }
+}
+
+function bindSearch() {
+  $("search-input").addEventListener("input", onSearchInput);
+  $("search-input").addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      $("search-input").value = "";
+      onSearchInput();
+      $("search-input").blur();
+    }
+  });
+  $("search-clear").addEventListener("click", () => {
+    $("search-input").value = "";
+    onSearchInput();
+    $("search-input").focus();
+  });
+  // 点击搜索框以外的区域收起下拉
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".search-block")) {
+      $("search-results").hidden = true;
+    } else if ($("search-input").value.trim()) {
+      $("search-results").hidden = false;
+    }
+  });
+}
+
 /* --------------------------------------------------------------- 拉取 */
 let loadingElapsed = 0;
 
@@ -591,6 +720,8 @@ if (window.__SNAPSHOT__) {
   render(window.__SNAPSHOT__);
   renderShareBanner(window.__SNAPSHOT__);
   updateCountdown();
+  bindSearch();
+  loadSearchIndex();
 } else {
   load();
   setInterval(() => load({ silent: true }), 10_000);
@@ -598,4 +729,8 @@ if (window.__SNAPSHOT__) {
     if (state.secondsLeft > 0) state.secondsLeft -= 1;
     updateCountdown();
   }, 1_000);
+  bindSearch();
+  // 搜索索引跟着全市场快照走（服务端 TTL 4 分钟），5 分钟取一次足够
+  loadSearchIndex();
+  setInterval(loadSearchIndex, 300_000);
 }

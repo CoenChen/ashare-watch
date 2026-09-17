@@ -50,6 +50,20 @@
 <div id="share-banner" class="warnings" hidden></div>
 
 <main class="layout">
+  <!-- 搜索：在全市场 5500+ 只里本地过滤，零延迟、不发请求 -->
+  <section class="search-block">
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true">
+        <circle cx="11" cy="11" r="7" fill="none" stroke="currentColor" stroke-width="2"/>
+        <path d="M16.5 16.5L21 21" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+      </svg>
+      <input id="search-input" type="search" autocomplete="off" spellcheck="false"
+             placeholder="搜索股票：代码或名称，如 600519 / 贵州茅台 / 宁德" />
+      <button id="search-clear" class="search-clear" hidden aria-label="清空">×</button>
+    </div>
+    <div id="search-results" class="search-results" hidden></div>
+  </section>
+
   <!-- 指数主卡 -->
   <section id="index-cards" class="index-row"></section>
 

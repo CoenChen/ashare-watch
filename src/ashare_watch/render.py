@@ -26,7 +26,23 @@ def _read_static(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def build_standalone_html(snapshot: dict, *, title: str = "A 股实时行情") -> str:
+def _inline(payload: object) -> str:
+    """序列化并转义，避免数据里的 </script> 提前闭合脚本标签。"""
+    text = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    return text.replace("</", "<\\/")
+
+
+def build_standalone_html(
+    snapshot: dict,
+    *,
+    title: str = "A 股实时行情",
+    search_index: list[list] | None = None,
+) -> str:
+    """把快照（和可选的搜索索引）内联进单个 HTML 文件。
+
+    搜索索引单独一个参数而不是塞进 snapshot：它是两百多 KB 的数组，
+    混进快照会让快照本身难以阅读，也会撑大存进 SQLite 的历史记录。
+    """
     html = _read_static("index.html")
     css = _read_static("styles.css")
     js = _read_static("app.js")
@@ -42,14 +58,11 @@ def build_standalone_html(snapshot: dict, *, title: str = "A 股实时行情") -
         html,
     )
 
-    payload = json.dumps(snapshot, ensure_ascii=False, separators=(",", ":"))
-    # 数据里可能出现 "</script>"，必须打散，否则会提前闭合脚本标签
-    payload = payload.replace("</", "<\\/")
-    html = html.replace(
-        "<script>",
-        f"<script>window.__SNAPSHOT__ = {payload};</script>\n<script>",
-        1,
-    )
+    injected = f"<script>window.__SNAPSHOT__ = {_inline(snapshot)};"
+    if search_index:
+        injected += f"window.__SEARCH_INDEX__ = {_inline(search_index)};"
+    injected += "</script>\n<script>"
+    html = html.replace("<script>", injected, 1)
     html = html.replace(
         "<title>A 股实时行情</title>",
         f"<title>{title} · {snapshot.get('fetched_at', '')}</title>",
@@ -63,10 +76,16 @@ def build_standalone_html(snapshot: dict, *, title: str = "A 股实时行情") -
     return html
 
 
-def export_snapshot(snapshot: dict, settings: Settings | None = None) -> Path:
+def export_snapshot(
+    snapshot: dict,
+    settings: Settings | None = None,
+    *,
+    search_index: list[list] | None = None,
+) -> Path:
     settings = settings or get_settings()
     settings.ensure_dirs()
     target = settings.export_path
-    target.write_text(build_standalone_html(snapshot), encoding="utf-8")
+    target.write_text(
+        build_standalone_html(snapshot, search_index=search_index), encoding="utf-8"
+    )
     return target
-

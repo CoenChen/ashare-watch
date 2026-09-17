@@ -65,7 +65,14 @@ def main(argv: list[str]) -> int:
         out_dir = ROOT / out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    html = build_standalone_html(data, title="A 股行情快照")
+    # 搜索索引单独取：它有两百多 KB，不进快照（快照要存进 SQLite）。
+    search_index: list[list] = []
+    try:
+        search_index = Collector(settings=get_settings()).search_index()
+    except Exception as error:  # noqa: BLE001
+        print(f"[警告] 搜索索引构建失败（{type(error).__name__}: {error}），页面搜索将不可用")
+
+    html = build_standalone_html(data, title="A 股行情快照", search_index=search_index)
     target = out_dir / "index.html"
     target.write_text(html, encoding="utf-8")
     (out_dir / ".nojekyll").write_text(NOJEKYLL, encoding="utf-8")
@@ -79,13 +86,14 @@ def main(argv: list[str]) -> int:
     print(f"  文件大小：{size_kb:.0f} KB")
     print(f"  覆盖范围：{coverage.get('universe', 0)} 只个股 / "
           f"{coverage.get('sectors', 0)} 个板块 / {coverage.get('indexes', 0)} 个指数")
+    print(f"  搜索索引：{len(search_index)} 只")
     print()
     print("把这个目录部署到任意静态托管即可获得一个可以发微信的链接：")
-    print("  GitHub Pages：仓库 Settings → Pages → Source 选 Deploy from a branch，")
-    print("                分支选 main，目录选 /docs，保存后等 1 分钟。")
+    print("  GitHub Pages：仓库 Settings → Pages → Source 选 GitHub Actions，")
+    print("                然后到 Actions 标签页手动跑一次工作流。")
+    print("                （本仓库的 pages.yml 会自动构建并发布，不需要提交这个文件）")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-

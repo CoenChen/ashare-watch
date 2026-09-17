@@ -48,7 +48,7 @@ class DashboardState:
     @property
     def interval(self) -> int:
         if self.snapshot and self.snapshot.market.is_open:
-            return max(15, self.settings.refresh_seconds)
+            return max(self.settings.min_refresh_seconds, self.settings.refresh_seconds)
         return max(60, self.settings.idle_seconds)
 
     def next_refresh_in(self) -> int:
@@ -189,6 +189,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/runs":
             self._send_json({"runs": self.collector.store.recent_runs(20)})
             return
+        if path == "/api/search-index":
+            # 搜索索引单独成接口，不塞进快照：它有两百多 KB，
+            # 而快照每 15 秒被序列化一次、还要存 500 份进 SQLite。
+            # 前端只在加载时和每 5 分钟取一次，成本可以忽略。
+            self._send_json({"rows": self.collector.search_index()})
+            return
         if path == "/api/health":
             self._send_json(
                 {
@@ -274,4 +280,3 @@ def serve(settings: Settings | None = None) -> None:
         worker.stop()
         httpd.shutdown()
         httpd.server_close()
-

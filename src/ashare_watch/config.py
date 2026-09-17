@@ -142,11 +142,19 @@ def _env_symbols(name: str) -> list[str]:
 
 @dataclass(slots=True)
 class Settings:
+    # 盘中刷新间隔。15 秒是实测出来的甜点：
+    #   * 一次「快速轮次」只发 2 个请求（指数+自选股批量、环球市场），
+    #     全市场那 56 页是按 TTL 缓存的，跟这个间隔无关；
+    #   * 所以从 60 秒提到 15 秒，请求量只从 20.7 涨到 22.0 请求/分钟；
+    #   * 下限是 2 秒——完整采集要 6.4 秒，间隔比它小会请求重叠堆积。
     refresh_seconds: int = field(
-        default_factory=lambda: _env_int("ASHARE_WATCH_REFRESH_SECONDS", 60)
+        default_factory=lambda: _env_int("ASHARE_WATCH_REFRESH_SECONDS", 15)
     )
     idle_seconds: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_IDLE_SECONDS", 900))
-    universe_ttl: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_UNIVERSE_TTL", 180))
+    # 全市场快照缓存。它占了 97% 的请求量（一次要翻 56 页），
+    # 所以这里松一点，把省下来的额度让给指数和自选股的快速刷新。
+    # 影响的是榜单/宽度/涨跌停统计的滞后时间，最多 4 分钟。
+    universe_ttl: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_UNIVERSE_TTL", 240))
     sector_ttl: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_SECTOR_TTL", 300))
     history_ttl: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_HISTORY_TTL", 21600))
 
@@ -160,6 +168,10 @@ class Settings:
     # 被限流之后的退避时间（秒）。限流窗口通常持续几秒，退避太短没意义。
     rate_limit_backoff: float = 2.5
     page_size: int = 100
+
+    # 刷新间隔的硬下限。完整采集（含全市场 56 页）实测 6.4 秒，
+    # 间隔比它小只会让请求重叠堆积，所以这里设一个地板拦住自己。
+    min_refresh_seconds: int = 2
 
     host: str = field(default_factory=lambda: os.getenv("ASHARE_WATCH_HOST", "127.0.0.1"))
     port: int = field(default_factory=lambda: _env_int("ASHARE_WATCH_PORT", 8771))
@@ -198,6 +210,11 @@ class Settings:
     @property
     def export_path(self) -> Path:
         return self.data_dir / "exports" / "ashare-dashboard.html"
+
+    @property
+    def search_index_path(self) -> Path:
+        """搜索索引的本地缓存，用于断网时兜底。"""
+        return self.data_dir / "search-index.json"
 
 
 _SETTINGS: Settings | None = None

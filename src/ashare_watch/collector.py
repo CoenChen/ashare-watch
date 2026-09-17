@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 import logging
+import json
 import time
 from datetime import datetime
 
 from ashare_watch.client import SinaClient
 from ashare_watch.config import Settings, get_settings
-from ashare_watch.derive import build_breadth, build_limit_stats, build_rankings
+from ashare_watch.derive import (
+    build_breadth,
+    build_limit_stats,
+    build_rankings,
+    build_search_index,
+)
 from ashare_watch.market import beijing_now, market_status
 from ashare_watch.models import Snapshot
 from ashare_watch.store import SnapshotStore
@@ -180,6 +186,48 @@ class Collector:
             snapshot.generated_ms / 1000,
         )
         return snapshot
+
+    def search_index(self) -> list[list]:
+        """搜索用的精简全市场索引。
+
+        刻意**不放进快照**：快照每 15 秒被 API 序列化一次、还要写进 SQLite
+        保留 500 份，塞进 200 多 KB 的索引会让数据库膨胀到上百 MB。
+        这里单独成接口，前端加载一次、每几分钟刷新一次就够了。
+
+        ``client.universe()`` 命中 TTL 缓存时几乎是零成本的，
+        所以前端频繁问也不会带来额外请求。
+
+        另外会把结果缓存在 ``data/search-index.json``：**离线构建时（比如
+        CI 里抓取失败、或本机断网）可以退回上一次的索引**，而不是让
+        分享出去的页面直接失去搜索能力。
+        """
+        rows = build_search_index(self.client.universe())
+        if rows:
+            try:
+                self.settings.ensure_dirs()
+                self.settings.search_index_path.write_text(
+                    json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
+                    encoding="utf-8",
+                )
+            except OSError as error:
+                LOGGER.warning("搜索索引缓存写入失败：%s", error)
+            return rows
+
+        # 抓不到全市场数据（断网 / 被限流）：退回上次的索引
+        cached = self._load_cached_search_index()
+        if cached:
+            LOGGER.warning("全市场数据不可用，搜索索引退回本地缓存（%d 条）", len(cached))
+        return cached
+
+    def _load_cached_search_index(self) -> list[list]:
+        path = self.settings.search_index_path
+        if not path.exists():
+            return []
+        try:
+            rows = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        return rows if isinstance(rows, list) else []
 
     def cached_or_refresh(self) -> Snapshot:
         cached = self.store.latest_snapshot()

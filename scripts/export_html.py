@@ -25,14 +25,20 @@ def main(argv: list[str]) -> int:
             print("本地还没有数据，正在抓取一次…")
             data = Collector(settings=settings).refresh().to_dict()
 
-    target = export_snapshot(data, settings)
+    index: list[list] = []
+    try:
+        index = Collector(settings=settings).search_index()
+    except Exception:  # noqa: BLE001
+        pass
+
+    target = export_snapshot(data, settings, search_index=index)
     print(f"已导出：{target}")
     print(f"  大小：{target.stat().st_size / 1024:.0f} KB")
     print(f"  数据时间：{data.get('fetched_at', '')}")
+    print(f"  搜索索引：{len(index)} 只")
     print("  双击文件即可在浏览器打开，不需要联网。")
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main(sys.argv[1:]))
-
