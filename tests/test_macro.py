@@ -1,7 +1,7 @@
-"""环球市场（黄金 / 原油 / 外汇 / 基本金属）的解析测试。
+"""环球市场（黄金 / 原油 / 基本金属 / 国内期货 / 外汇）的解析测试。
 
 这里的 payload 是**实测抓到的真实返回**，字段位置完全一致。
-新浪对这三类品种用了三套不同的布局，而且都是按下标取的，
+新浪对这几类品种用了四套不同的布局，而且都是按下标取的，
 所以必须逐套锁死——不然哪天改错一个下标，页面上的数字会悄悄变错。
 """
 
@@ -10,6 +10,7 @@ from __future__ import annotations
 from ashare_watch.client import SinaClient
 from ashare_watch.config import (
     MACRO_GROUPS,
+    MACRO_UNITS,
     Settings,
     default_macro_symbols,
     macro_group_of,
@@ -41,11 +42,19 @@ PLAIN_DINIW = (
     "100.1634,美元指数,2026-09-17"
 ).split(",")
 
+# 实测返回：国内期货（上期所沪金主力）。注意第 5 位「昨收盘」恒为 0.000，
+# 基准价要看第 10 位「昨结算」。
+NF_GOLD = (
+    "沪金连续,000645,948.200,949.240,943.360,0.000,946.720,946.840,946.760,"
+    "0.000,937.200,1,1,188296.000,46605,上期所,黄金,2026-09-18,1,,"
+).split(",") + [""] * 25
+
 SINA_TEXT = (
     'var hq_str_hf_XAU="' + ",".join(HF_GOLD) + '";\n'
     'var hq_str_hf_CL="' + ",".join(HF_OIL) + '";\n'
     'var hq_str_fx_susdcny="' + ",".join(FX_USDCNY) + '";\n'
     'var hq_str_DINIW="' + ",".join(PLAIN_DINIW) + '";\n'
+    'var hq_str_nf_AU0="' + ",".join(NF_GOLD) + '";\n'
 )
 
 
@@ -89,6 +98,35 @@ def test_parse_plain_layout_has_no_change_fields():
     assert data["date"] == "2026-09-17"
 
 
+def test_parse_domestic_futures_layout():
+    """国内期货取第 8 位最新价、第 10 位昨结算。
+
+    这条断言是防回归的重点：曾经用简化布局去套 ``nf_``，把第 3 位「今日最高」
+    当成了昨收，沪金的涨跌幅直接从 +1% 变成 -0.3%。
+    """
+    data = macro_fields("nf_AU0", NF_GOLD)
+    assert data["price"] == 946.76
+    assert data["prev_close"] == 937.20      # 昨结算，不是 949.24（今日最高）
+    assert data["high"] == 949.24
+    assert data["low"] == 943.36
+    assert data["open"] == 948.20
+    assert data["time"] == "00:06:45"        # 000645 补上分隔符
+    assert data["date"] == "2026-09-18"
+
+
+def test_domestic_futures_direction_is_up():
+    client = SinaClient(Settings(data_dir="/tmp/ashare-watch-test"))
+    client._request = lambda host, path, params=None: SINA_TEXT.encode("gbk")  # type: ignore[assignment]
+    quotes = client.macro_quotes(["nf_AU0"])
+    assert len(quotes) == 1
+    gold = quotes[0]
+    assert gold.direction == "up"
+    assert round(gold.change, 2) == 9.56             # 946.76 - 937.20
+    assert round(gold.change_pct, 2) == 1.02
+    assert gold.unit == "元/克"
+    assert gold.group == "国内贵金属"
+
+
 def test_digits_by_magnitude():
     """汇率要 4 位小数才有信息量，黄金 2 位就够。"""
     assert digits_for(6.7065) == 4
@@ -105,7 +143,46 @@ def test_macro_config_is_consistent():
     for code, name in [item for group in MACRO_GROUPS.values() for item in group]:
         assert macro_name_of(code) == name
         assert macro_group_of(code) in MACRO_GROUPS
-    assert set(MACRO_GROUPS) == {"贵金属", "能源", "基本金属", "外汇"}
+    assert set(MACRO_GROUPS) == {
+        "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指", "外汇",
+    }
+
+
+def test_macro_covers_pm_and_fx_broadly():
+    """贵金属和外汇要覆盖足够多的品种——这两类是用户明确要求扩充的。"""
+    pm = {name for _, name in MACRO_GROUPS["贵金属"]}
+    assert {"伦敦金", "纽约黄金", "伦敦银", "纽约白银", "伦敦铂金", "伦敦钯金"} <= pm
+    # 国内金价：A 股黄金股（山东黄金、中金黄金）跟的是这个，不是伦敦金
+    assert {"沪金主力", "沪银主力"} <= {name for _, name in MACRO_GROUPS["国内贵金属"]}
+
+    fx = {name for _, name in MACRO_GROUPS["外汇"]}
+    assert {
+        "美元指数", "美元人民币", "离岸人民币", "欧元美元", "美元日元",
+        "英镑美元", "澳元美元", "美元港元", "美元加元", "美元瑞郎",
+        "纽元美元", "欧元英镑", "欧元日元", "英镑日元", "美元新加坡元", "美元韩元",
+    } <= fx
+    assert len(fx) >= 16
+
+
+def test_macro_covers_index_futures_for_overnight_sentiment():
+    """隔夜外盘是 A 股开盘前最直接的情绪参考，必须覆盖。"""
+    index_names = {name for _, name in MACRO_GROUPS["海外股指"]}
+    assert {"标普500期货", "纳指100期货", "道指期货", "恒指期货", "富时A50期货"} <= index_names
+
+
+def test_every_macro_symbol_has_a_unit_or_is_an_fx_pair():
+    """贵金属/能源/基本金属必须标注计价单位，否则看不出量级是否正常。
+    汇率本身没有单位，允许为空。"""
+    for group in ("贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指"):
+        for code, name in MACRO_GROUPS[group]:
+            assert MACRO_UNITS.get(code), f"{name}({code}) 缺少计价单位"
+
+
+def test_macro_symbols_fit_in_one_request():
+    """全部品种要能塞进一次批量请求，不然首屏会变慢。"""
+    symbols = default_macro_symbols()
+    assert len(symbols) <= 60
+    assert len(",".join(symbols)) < 400, "查询串太长，新浪的 list= 有长度限制"
 
 
 def test_macro_group_lookup_covers_every_symbol():
@@ -154,4 +231,3 @@ def test_macro_request_failure_returns_empty():
     client = SinaClient(Settings(data_dir="/tmp/ashare-watch-test"))
     client._request = lambda host, path, params=None: None  # type: ignore[assignment]
     assert client.macro_quotes() == []
-

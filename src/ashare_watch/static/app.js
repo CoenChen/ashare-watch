@@ -271,7 +271,9 @@ function renderHistory() {
  *  数字用等宽字体对齐，小数位按各自量级决定（汇率 4 位、黄金 2 位），
  *  否则美元人民币会显示成一潭死水。
  */
-const MACRO_ORDER = ["贵金属", "能源", "基本金属", "外汇"];
+const MACRO_ORDER = [
+  "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指", "外汇",
+];
 
 function renderMacro(macro) {
   const host = $("macro-groups");
@@ -503,12 +505,15 @@ function renderSearchResults(rows, query) {
           : pctValue > 0.0001 ? "up" : pctValue < -0.0001 ? "down" : "flat";
       const turn =
         turnover === null || turnover === undefined ? "—" : turnover.toFixed(2) + "%";
+      const on = isFollowed(code);
       return `<div class="search-row">
         <span class="sr-code ${dirClass(d)}">${esc(code)}</span>
         <span class="sr-name">${esc(name)}<em>${boardName(code)}</em></span>
         <span class="sr-price ${dirClass(d)}">${num(price)}</span>
         <span class="sr-pct ${dirClass(d)}">${pct(pctValue)}</span>
         <span class="sr-meta">${turn} · ${money((amountWan || 0) * 10000)}</span>
+        <button class="star-btn ${on ? "on" : ""}" data-code="${esc(code)}"
+                title="${on ? "取消关注" : "加入关注"}">${on ? "★" : "☆"}</button>
       </div>`;
     })
     .join("");
@@ -528,13 +533,18 @@ async function loadSearchIndex() {
   // 静态分享页：索引已内联在页面里，直接用，不产生任何请求
   if (window.__SEARCH_INDEX__) {
     searchIndex = window.__SEARCH_INDEX__;
-    return;
+  } else {
+    try {
+      const response = await fetch("/api/search-index", { cache: "no-store" });
+      searchIndex = (await response.json()).rows || [];
+    } catch (error) {
+      searchIndex = null; // 搜索不可用不该影响其它功能
+    }
   }
-  try {
-    const response = await fetch("/api/search-index", { cache: "no-store" });
-    searchIndex = (await response.json()).rows || [];
-  } catch (error) {
-    searchIndex = null; // 搜索不可用不该影响其它功能
+  // 建一份 code → 行 的映射：关注列表在没有后端时靠它取数
+  searchRowsByCode = new Map();
+  if (searchIndex) {
+    for (const row of searchIndex) searchRowsByCode.set(row[0], row);
   }
 }
 
@@ -552,6 +562,28 @@ function bindSearch() {
     onSearchInput();
     $("search-input").focus();
   });
+  // 星标用事件委托：搜索结果每次重绘，逐个绑定会漏
+  $("search-results").addEventListener("click", (event) => {
+    const btn = event.target.closest(".star-btn");
+    if (btn) {
+      event.stopPropagation();
+      toggleFollow(btn.dataset.code);
+    }
+  });
+  $("follow-clear").addEventListener("click", () => {
+    if (!followed.length) return;
+    // 二次确认做在按钮自己身上，不用浏览器的 confirm 弹窗：
+    // 原生弹窗的样式和整个页面不搭，而且会阻塞其它渲染。
+    if (!clearArmed) {
+      armClear();
+      return;
+    }
+    disarmClear();
+    followed = [];
+    followQuotes.clear();
+    saveFollowState();
+    renderFollow();
+  });
   // 点击搜索框以外的区域收起下拉
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".search-block")) {
@@ -560,6 +592,242 @@ function bindSearch() {
       $("search-results").hidden = false;
     }
   });
+}
+
+/* ------------------------------------------------------------ 我的关注
+ *
+ *  关注列表存在浏览器 localStorage 里，而不是服务端。三个理由：
+ *    1. 静态分享页面没有服务端，但搜索和关注同样应该能用；
+ *    2. 关注是个人偏好，不值得为它引入账号体系；
+ *    3. 不需要为它改服务端配置再重启。
+ *
+ *  行情数据取两条路：
+ *    * 本地服务：`/api/quotes?codes=...` 拿实时行情（和自选股同一节奏）
+ *    * 静态页面：从内联的全市场搜索索引里查，会有几分钟滞后，但至少有数据
+ *
+ *  另外把「上一次看到的行情」也一起存下来。刷新页面时先用它把卡片画出来，
+ *  接口回来再覆盖——否则刚打开的一瞬间会是一屏「—」，看着像坏了。
+ */
+const FOLLOW_KEY = "ashare-watch:followed";
+const FOLLOW_LIMIT = 30;
+
+function isStockCode(code) {
+  return typeof code === "string" && /^\d{6}$/.test(code);
+}
+
+function loadFollowState() {
+  const empty = { codes: [], quotes: {} };
+  let raw = null;
+  try {
+    // 隐私模式下 localStorage 可能直接抛，只有这一行需要兜
+    raw = localStorage.getItem(FOLLOW_KEY);
+  } catch (error) {
+    return empty;
+  }
+  if (!raw) return empty;
+  let data = null;
+  try {
+    data = JSON.parse(raw);
+  } catch (error) {
+    return empty; // 存储被改坏了，当没有处理
+  }
+  // 下面故意放在 try 外面：万一哪天写出 bug（比如变量声明顺序不对），
+  // 让它当场报错，而不是被 catch 吞掉、把用户的关注列表悄悄清空一次。
+  if (Array.isArray(data)) return { codes: data.filter(isStockCode), quotes: {} };
+  return {
+    codes: Array.isArray(data.codes) ? data.codes.filter(isStockCode) : [],
+    quotes: data.quotes && typeof data.quotes === "object" ? data.quotes : {},
+  };
+}
+
+const FOLLOW_STATE = loadFollowState();
+let followed = FOLLOW_STATE.codes;
+let followQuotes = new Map(Object.entries(FOLLOW_STATE.quotes));  // code -> 扁平对象
+let searchRowsByCode = new Map();
+
+function saveFollowState() {
+  try {
+    localStorage.setItem(FOLLOW_KEY, JSON.stringify({
+      codes: followed,
+      quotes: Object.fromEntries(followQuotes),
+    }));
+  } catch (error) {
+    /* 存不进去就只在本次会话有效，不影响使用 */
+  }
+}
+
+const isFollowed = (code) => followed.includes(code);
+
+let clearArmed = false;
+let clearTimer = 0;
+
+/** 把「全部清空」切成待确认状态，4 秒内没再点就自动收回去。 */
+function armClear() {
+  clearArmed = true;
+  const btn = $("follow-clear");
+  btn.textContent = "再点一次确认";
+  btn.classList.add("armed");
+  clearTimeout(clearTimer);
+  clearTimer = setTimeout(disarmClear, 4000);
+}
+
+function disarmClear() {
+  clearArmed = false;
+  clearTimeout(clearTimer);
+  const btn = $("follow-clear");
+  if (!btn) return;
+  btn.textContent = "全部清空";
+  btn.classList.remove("armed");
+}
+
+function toggleFollow(code) {
+  if (isFollowed(code)) {
+    followed = followed.filter((c) => c !== code);
+  } else {
+    if (followed.length >= FOLLOW_LIMIT) {
+      // 同样不用 alert：在计数那一条上提示就好，不打断操作
+      flashFollowHint(`最多 ${FOLLOW_LIMIT} 只`);
+      return;
+    }
+    // 新加的放最前面，刚点完能立刻看到
+    followed = [code, ...followed];
+  }
+  saveFollowState();
+  renderFollow();
+  refreshFollowQuotes();
+  renderSearchResults(searchStocks($("search-input").value), $("search-input").value);
+}
+
+function flashFollowHint(text) {
+  const chip = $("follow-count");
+  chip.textContent = text;
+  chip.classList.add("warn");
+  clearTimeout(flashFollowHint.timer);
+  flashFollowHint.timer = setTimeout(() => {
+    chip.classList.remove("warn");
+    renderFollow();
+  }, 2500);
+}
+
+function renderFollow() {
+  const host = $("follow-list");
+  const count = $("follow-count");
+  const clear = $("follow-clear");
+  count.textContent = followed.length ? `${followed.length} 只` : "—";
+  clear.hidden = followed.length === 0;
+
+  if (!followed.length) {
+    host.innerHTML = `<div class="follow-empty">
+      还没有关注的股票。<br />
+      在上面的搜索框里输入<b>代码或名称</b>，点结果右侧的 <b>☆</b> 即可加入。<br />
+      <span style="font-size:11.5px">关注列表保存在你自己的浏览器里，不会上传。</span>
+    </div>`;
+    return;
+  }
+
+  host.innerHTML = followed
+    .map((code) => {
+      const q = quoteFor(code);
+      if (!q) {
+        // 手上一条数据都没有（新加的、又还没拉到行情）：不要摆一排「—」，
+        // 那看起来像接口挂了。给一个明确的等待态。
+        return `<div class="watch-card pending">
+          <button class="remove-btn" data-code="${esc(code)}" title="移除关注">×</button>
+          <div class="top"><span class="sym">${esc(code)}</span></div>
+          <div class="nm">正在取行情…</div>
+          <div class="px">…</div>
+        </div>`;
+      }
+      const d = q.direction || "flat";
+      const limit = q.limit_status
+        ? `<span class="limit-tag ${q.limit_status.includes("涨") ? "up" : "down"}">${esc(q.limit_status)}</span>`
+        : "";
+      const st = q.is_st ? '<span class="tag-st">ST</span>' : "";
+      const chg = q.change === undefined || q.change === null
+        ? ""
+        : `<div class="chg ${dirClass(d)}">${signed(q.change)}</div>`;
+      const vol = q.amount
+        ? `<div class="vol">额 ${money(q.amount)}${q.turnover != null ? ` · 换手 ${q.turnover.toFixed(2)}%` : ""}</div>`
+        : "";
+      return `<div class="watch-card ${d}">
+        <button class="remove-btn" data-code="${esc(code)}" title="移除关注">×</button>
+        <div class="top">
+          <span class="sym">${esc(code)}</span>
+          <span class="pct ${dirClass(d)}">${pct(q.change_pct)}</span>
+        </div>
+        <div class="nm" title="${esc(q.name || "")}">${esc(q.name || "")}${st}${limit}</div>
+        <div class="px ${dirClass(d)}">${q.price ? num(q.price) : "—"}</div>
+        ${chg}${vol}
+      </div>`;
+    })
+    .join("");
+
+  host.querySelectorAll(".remove-btn").forEach((btn) => {
+    btn.addEventListener("click", () => toggleFollow(btn.dataset.code));
+  });
+}
+
+/** 关注卡片的数据来源：先用手上的实时行情，没有就用搜索索引兜底。 */
+function quoteFor(code) {
+  return followQuotes.get(code) || rowToQuote(searchRowsByCode.get(code)) || null;
+}
+
+/** 把搜索索引的一行（数组）转成和行情一样的扁平结构。 */
+function rowToQuote(row) {
+  if (!row) return null;
+  const [code, name, price, changePct, turnover, amountWan] = row;
+  return {
+    code,
+    name,
+    price,
+    change_pct: changePct,
+    turnover,
+    amount: (amountWan || 0) * 10000,
+    direction: changePct === null || changePct === undefined
+      ? "flat"
+      : changePct > 0.0001 ? "up" : changePct < -0.0001 ? "down" : "flat",
+  };
+}
+
+async function refreshFollowQuotes() {
+  if (!followed.length) {
+    followQuotes.clear();
+    return;
+  }
+  // 静态分享页没有后端：退回用内联的全市场索引（滞后几分钟，但至少有数据）
+  if (window.__SNAPSHOT__) {
+    followed.forEach((code) => {
+      const row = searchRowsByCode.get(code);
+      if (row) followQuotes.set(code, rowToQuote(row));
+    });
+    saveFollowState();
+    renderFollow();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/quotes?codes=${followed.join(",")}`, { cache: "no-store" });
+    const data = await response.json();
+    const next = new Map();
+    (data.quotes || []).forEach((q) => {
+      next.set(q.code, {
+        code: q.code,
+        name: q.name,
+        price: q.price,
+        change: q.change,
+        change_pct: q.change_pct,
+        turnover: q.turnover,
+        amount: q.amount,
+        direction: q.direction,
+        is_st: q.is_st,
+        limit_status: q.limit_status,
+      });
+    });
+    followQuotes = next;
+    saveFollowState();
+    renderFollow();
+  } catch (error) {
+    /* 拿不到就继续显示上一次的数据 */
+  }
 }
 
 /* --------------------------------------------------------------- 拉取 */
@@ -721,7 +989,8 @@ if (window.__SNAPSHOT__) {
   renderShareBanner(window.__SNAPSHOT__);
   updateCountdown();
   bindSearch();
-  loadSearchIndex();
+  renderFollow();
+  loadSearchIndex().then(refreshFollowQuotes);
 } else {
   load();
   setInterval(() => load({ silent: true }), 10_000);
@@ -730,7 +999,11 @@ if (window.__SNAPSHOT__) {
     updateCountdown();
   }, 1_000);
   bindSearch();
+  renderFollow();
   // 搜索索引跟着全市场快照走（服务端 TTL 4 分钟），5 分钟取一次足够
-  loadSearchIndex();
+  loadSearchIndex().then(refreshFollowQuotes);
   setInterval(loadSearchIndex, 300_000);
+  // 关注列表的行情单独刷新：它可能要取自选股之外的代码，
+  // 所以走 /api/quotes，20 秒一次（复用连接，成本很低）
+  setInterval(refreshFollowQuotes, 20_000);
 }

@@ -17,6 +17,8 @@ import logging
 import mimetypes
 import threading
 import time
+import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -26,6 +28,7 @@ from ashare_watch.config import Settings, get_settings
 from ashare_watch.models import Snapshot
 from ashare_watch.render import export_snapshot
 from ashare_watch.store import SnapshotStore
+from ashare_watch.structure import to_sina_symbol
 
 LOGGER = logging.getLogger("ashare_watch.server")
 
@@ -195,6 +198,21 @@ class Handler(BaseHTTPRequestHandler):
             # 前端只在加载时和每 5 分钟取一次，成本可以忽略。
             self._send_json({"rows": self.collector.search_index()})
             return
+        if path == "/api/quotes":
+            # 任意代码的实时行情，供「我的关注」使用。
+            # 关注列表存在浏览器本地（这样静态分享页也能用），
+            # 前端每次会把需要刷新的代码通过 query 传过来，服务端不保存状态。
+            query = urllib.parse.urlparse(self.path).query
+            raw = urllib.parse.parse_qs(query).get("codes", [""])[0]
+            symbols = [to_sina_symbol(c.strip()) for c in raw.split(",") if c.strip()]
+            # 上限保护：避免有人拿这个接口当批量下载用
+            symbols = symbols[:60]
+            if not symbols:
+                self._send_json({"quotes": []})
+                return
+            quotes = self.collector.client.quotes(symbols)
+            self._send_json({"quotes": [q.to_dict() for q in quotes]})
+            return
         if path == "/api/health":
             self._send_json(
                 {
@@ -229,6 +247,21 @@ class Handler(BaseHTTPRequestHandler):
         self._send_json({"error": "not found"}, 404)
 
 
+class SingleInstanceServer(ThreadingHTTPServer):
+    """不允许两个看板绑同一个端口。
+
+    ``http.server`` 默认是 ``allow_reuse_address = 1``。这个选项在 Linux 上
+    只是「重启后立刻复用 TIME_WAIT 的端口」，但在 Windows 上它的语义完全不同：
+    **两个进程可以同时绑同一个端口**，而且先绑的那个继续收连接。
+
+    后果非常隐蔽——双击两次 start.bat，新进程正常启动、日志也正常刷新，
+    但浏览器访问到的还是旧进程的数据。你会以为是「改了代码没生效」，
+    实际上是老实例一直活着。关掉这个选项，第二个实例会直接报端口占用。
+    """
+
+    allow_reuse_address = False
+
+
 def create_server(
     settings: Settings | None = None, *, start_worker: bool = True
 ) -> tuple[ThreadingHTTPServer, DashboardState, RefreshWorker, Collector]:
@@ -253,17 +286,45 @@ def create_server(
     Handler.collector = collector
     Handler.worker = worker
 
-    httpd = ThreadingHTTPServer((settings.host, settings.port), Handler)
+    httpd = SingleInstanceServer((settings.host, settings.port), Handler)
     httpd.daemon_threads = True
     if start_worker:
         worker.start()
     return httpd, state, worker, collector
 
 
+def running_instance(url: str) -> bool:
+    """判断这个地址上是不是已经有一个看板在跑。
+
+    只认 ``/api/health`` 返回的 ``status == "ok"``，避免把恰好占了同一个端口
+    的别的程序误判成「看板已在运行」。
+    """
+    try:
+        with urllib.request.urlopen(f"{url}/api/health", timeout=2) as response:
+            return json.loads(response.read().decode("utf-8")).get("status") == "ok"
+    except Exception:  # noqa: BLE001 - 连不上就是没有，不需要区分原因
+        return False
+
+
 def serve(settings: Settings | None = None) -> None:
     settings = settings or get_settings()
-    httpd, _state, worker, _collector = create_server(settings)
     url = f"http://{settings.host}:{settings.port}"
+
+    try:
+        httpd, _state, worker, _collector = create_server(settings)
+    except OSError:
+        # 端口被占。绝大多数情况是用户又双击了一次 start.bat，
+        # 这时候「把已经在跑的那个打开」比报一堆错有用得多。
+        if running_instance(url):
+            print(f"看板已经在运行了：{url}")
+            print("  直接打开这个地址即可，不需要再启动一份。")
+            if settings.open_browser:
+                webbrowser.open(url)
+            return
+        print(f"[ERROR] 端口 {settings.port} 被占用，但那个程序不是本看板。")
+        print("  换个端口再启动，例如： set ASHARE_WATCH_PORT=8781")
+        raise
+
     print(f"A 股实时行情已启动：{url}")
     print(f"  刷新节奏：盘中 {settings.refresh_seconds} 秒 / 其他时段 {settings.idle_seconds} 秒")
     print(f"  数据文件：{settings.db_path}")

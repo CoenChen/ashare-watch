@@ -90,6 +90,25 @@ class SnapshotStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def latest_complete_snapshot(self, *, min_universe: int = 1000) -> dict | None:
+        """最近一份「全市场数据完整」的快照。
+
+        抓取偶尔会**成功但只拿到一部分**：接口临时限流时，全市场那 56 页会
+        大面积失败，快照照样会存下来，只是榜单、市场宽度、涨跌停统计全是空的。
+
+        对导出/兜底这种场景来说，一份「稍旧但完整」的快照远比「最新但空掉一半」
+        有用——后者打开就是一个残缺页面，看的人会以为项目坏了。
+        """
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT payload FROM snapshots ORDER BY id DESC LIMIT 60"
+            ).fetchall()
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if (payload.get("coverage") or {}).get("universe", 0) >= min_universe:
+                return payload
+        return None
+
     def log_run(
         self,
         *,
@@ -139,4 +158,3 @@ class SnapshotStore:
     def close(self) -> None:
         with self._lock:
             self._connection.close()
-

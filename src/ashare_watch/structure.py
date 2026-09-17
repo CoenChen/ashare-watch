@@ -205,12 +205,20 @@ def parse_js_object(text: str) -> dict[str, str]:
 def macro_fields(symbol: str, fields: list[str]) -> dict[str, object]:
     """解析环球市场行情。
 
-    新浪对这三类品种用了**三套完全不同的字段布局**，而且都是按位置取的，
+    新浪对这几类品种用了**四套完全不同的字段布局**，而且都是按位置取的，
     没有字段名。下面每一段注释都标了实测的字段位置，改的时候照着对：
 
-    **外盘期货（``hf_`` 前缀）**——黄金、原油、伦铜::
+    **外盘期货（``hf_`` 前缀）**——黄金、原油、伦铜、海外股指期货::
 
         0 现价 | 4 最高 | 5 最低 | 6 时间 | 7 昨收 | 8 今开 | 12 日期 | 13 名称
+
+    **国内期货（``nf_`` 前缀）**——上期所的沪金、沪银、沪铜、螺纹钢::
+
+        0 名称 | 1 时间 | 2 今开 | 3 最高 | 4 最低 | 8 最新价 | 10 昨结算 | 17 日期
+
+    国内期货是最容易踩坑的一套：第 5 位叫「昨收盘」，但期货**没有收盘价**，
+    这一位恒为 ``0.000``；真正的参考价是第 10 位「昨结算」。要是拿别的布局
+    去套，很容易把「今日最高」当成基准，涨跌幅直接算反方向。
 
     **外汇即期（``fx_s`` 前缀）**——自带涨跌幅，不用自己算::
 
@@ -238,6 +246,18 @@ def macro_fields(symbol: str, fields: list[str]) -> dict[str, object]:
             "date": (at(12) or "").strip(),
         }
 
+    if symbol.lower().startswith("nf_"):
+        return {
+            "name": (at(0) or "").strip(),
+            "price": parse_number(at(8)),
+            "prev_close": parse_number(at(10)),
+            "open": parse_number(at(2)),
+            "high": parse_number(at(3)),
+            "low": parse_number(at(4)),
+            "time": _compact_clock(at(1)),
+            "date": (at(17) or "").strip(),
+        }
+
     # 外汇：第 10/11 位直接给了涨跌幅与涨跌额，比自己算更准
     has_change = symbol.lower().startswith("fx_s")
     last = fields[-1].strip() if fields else ""
@@ -252,6 +272,17 @@ def macro_fields(symbol: str, fields: list[str]) -> dict[str, object]:
         "time": (at(0) or "").strip(),
         "date": last if re.fullmatch(r"\d{4}-\d{2}-\d{2}", last) else "",
     }
+
+
+def _compact_clock(raw: str | None) -> str:
+    """国内期货的时间是 ``000645`` 这种无分隔写法，补成 ``00:06:45``。
+
+    长度对不上就原样返回——这里只做美化，不该因为格式意外就丢掉信息。
+    """
+    text = (raw or "").strip()
+    if len(text) == 6 and text.isdigit():
+        return f"{text[0:2]}:{text[2:4]}:{text[4:6]}"
+    return text
 
 
 def digits_for(price: float | None) -> int:

@@ -40,13 +40,21 @@ def get_snapshot(*, refresh: bool) -> tuple[dict, str]:
     if refresh:
         try:
             snapshot = Collector(settings=settings, store=store).refresh()
-            return snapshot.to_dict(), "刚刚抓取"
+            fresh = snapshot.to_dict()
+            if (fresh.get("coverage") or {}).get("universe", 0) > 0:
+                return fresh, "刚刚抓取"
+            # 抓取"成功"但没拿到全市场数据（多半是被临时限流）。
+            # 这种快照发到线上就是一个没有榜单的残缺页面，不如退回完整的那份。
+            print("[警告] 本次抓取没拿到全市场数据（榜单/宽度/涨跌停会不完整）")
         except Exception as error:  # noqa: BLE001
             print(f"[警告] 抓取失败（{type(error).__name__}: {error}），尝试使用本地快照")
 
+    cached = store.latest_complete_snapshot()
+    if cached:
+        return cached, f"本地完整快照（{cached.get('fetched_at', '')}）"
     cached = store.latest_snapshot()
     if cached:
-        return cached, "本地快照"
+        return cached, "本地快照（不完整）"
     raise SystemExit(
         "没有可用数据：既没能抓取成功，本地也没有快照。"
         "请检查网络后重新运行，或先执行 python scripts/fetch_once.py"

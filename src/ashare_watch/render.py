@@ -47,14 +47,18 @@ def build_standalone_html(
     css = _read_static("styles.css")
     js = _read_static("app.js")
 
+    # 注意：替换内容一律走函数形式，不能直接当字符串传。
+    # re.sub 会把替换串里的反斜杠当转义处理——JS 里只要出现一个 `\d`
+    # 或 `\n`（正则、模板字符串里到处都是），轻则报 bad escape，
+    # 重则悄悄把代码改坏。传函数则原样替换，不经过转义。
     html = re.sub(
         r'<link[^>]*href="/static/styles\.css"[^>]*/?>',
-        f"<style>\n{css}\n</style>",
+        lambda _match: f"<style>\n{css}\n</style>",
         html,
     )
     html = re.sub(
         r'<script[^>]*src="/static/app\.js"[^>]*></script>',
-        f"<script>\n{js}\n</script>",
+        lambda _match: f"<script>\n{js}\n</script>",
         html,
     )
 
