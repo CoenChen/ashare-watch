@@ -458,18 +458,39 @@ class SinaClient:
     # 行业板块
     # ------------------------------------------------------------------ #
     def macro_quotes(self, symbols: list[str] | None = None) -> list[MacroQuote]:
-        """环球市场行情：黄金、原油、基本金属、外汇。
+        """环球市场行情：贵金属、能源、基本金属、国内期货、海外股指、外汇、数字货币。
 
-        和 A 股行情同一个域名，所以一次批量请求就能全拿到，只是**解析规则不同**
-        （外盘期货、外汇、美元指数是三套字段布局，见 ``structure.macro_fields``）。
+        和 A 股行情同一个域名，所以可以批量拿，只是**解析规则不同**
+        （外盘期货、国内期货、外汇、美元指数是四套字段布局，
+        见 ``structure.macro_fields``）。
+
+        品种超过 ``MACRO_CHUNK_SIZE`` 时会拆成几批并发取：新浪的 ``list=``
+        是拼在 URL 里的，五十多个代码压成一条超长 URL 有被截断的风险。
+        拆分只多一个请求，比赌 URL 不被截断划算。
         """
         symbols = list(symbols or self.settings.macro_symbols)
         if not symbols:
             return []
-        raw = self._request(HOST_QUOTE, "/list=" + ",".join(symbols))
-        if not raw:
-            return []
-        parsed = parse_sina_quotes(decode_gbk(raw))
+
+        unique = list(dict.fromkeys(symbols))
+        size = max(1, self.settings.macro_chunk_size)
+        chunks = [unique[i : i + size] for i in range(0, len(unique), size)]
+
+        def fetch(chunk: list[str]) -> dict[str, list[str]]:
+            raw = self._request(HOST_QUOTE, "/list=" + ",".join(chunk))
+            return parse_sina_quotes(decode_gbk(raw)) if raw else {}
+
+        parsed: dict[str, list[str]] = {}
+        if len(chunks) == 1:
+            # 常见情况就是一批，不必为了它去开线程池
+            parsed = fetch(chunks[0])
+        else:
+            futures = [self._pool.submit(fetch, chunk) for chunk in chunks]
+            for future in futures:
+                try:
+                    parsed.update(future.result())
+                except Exception as error:  # noqa: BLE001
+                    LOGGER.warning("环球市场分批失败：%s", error)
 
         out: list[MacroQuote] = []
         for symbol in symbols:

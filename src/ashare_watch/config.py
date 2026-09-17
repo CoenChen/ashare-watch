@@ -47,9 +47,12 @@ DEFAULT_INDEXES: tuple[str, ...] = (
 #   国内贵金属 → 上海金交所/上期所的国内金价，比伦敦金更贴近 A 股黄金股
 #   能源     → 石油石化、航空、化工成本
 #   基本金属 → 有色板块、制造业成本
-#   黑色系   → 地产、基建、钢铁股的景气度
+#   黑色系   → 地产、基建、钢铁与煤炭股的景气度
+#   化工     → 化纤、煤化工、纯碱玻璃这条链
+#   农产品   → 食品饲料、纺织服装的成本端
 #   海外股指 → 隔夜外盘情绪，开盘前的风向标
 #   外汇     → 外资流向、出口链、美元流动性
+#   数字货币 → 全球风险偏好的温度计
 MACRO_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
     "贵金属": (
         ("hf_XAU", "伦敦金"),
@@ -80,6 +83,18 @@ MACRO_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
     "黑色系": (
         ("nf_RB0", "螺纹钢"),
         ("nf_I0", "铁矿石"),
+        ("nf_JM0", "焦煤"),
+        ("nf_J0", "焦炭"),
+    ),
+    "化工": (
+        ("nf_TA0", "PTA"),
+        ("nf_MA0", "甲醇"),
+        ("nf_SA0", "纯碱"),
+    ),
+    "农产品": (
+        ("nf_M0", "豆粕"),
+        ("nf_CF0", "郑棉"),
+        ("nf_SR0", "白糖"),
     ),
     "海外股指": (
         ("hf_ES", "标普500期货"),
@@ -105,12 +120,21 @@ MACRO_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
         ("fx_susdchf", "美元瑞郎"),
         ("fx_susdsgd", "美元新加坡元"),
         ("fx_susdkrw", "美元韩元"),
+        ("fx_susdthb", "美元泰铢"),
+        ("fx_susdzar", "美元南非兰特"),
+        ("fx_susdbrl", "美元巴西雷亚尔"),
+        ("fx_susdinr", "美元印度卢比"),
+        ("fx_scnyjpy", "人民币日元"),
+        ("fx_seurcny", "人民币欧元"),
+    ),
+    "数字货币": (
+        ("fx_sbtcusd", "比特币"),
     ),
 }
 
 
 def default_macro_symbols() -> list[str]:
-    """把分组拍平成一个代码列表，用于一次批量请求。"""
+    """把分组拍平成一个代码列表。实际请求会按 MACRO_CHUNK_SIZE 分批取。"""
     return [symbol for group in MACRO_GROUPS.values() for symbol, _ in group]
 
 
@@ -137,13 +161,27 @@ MACRO_UNITS: dict[str, str] = {
     "nf_AL0": "元/吨",
     "nf_RB0": "元/吨",
     "nf_I0": "元/吨",
+    "nf_JM0": "元/吨",
+    "nf_J0": "元/吨",
+    "nf_TA0": "元/吨",
+    "nf_MA0": "元/吨",
+    "nf_SA0": "元/吨",
+    "nf_M0": "元/吨",
+    "nf_CF0": "元/吨",
+    "nf_SR0": "元/吨",
     "hf_ES": "点",
     "hf_NQ": "点",
     "hf_YM": "点",
     "hf_HSI": "点",
     "hf_CHA50CFD": "点",
+    "fx_sbtcusd": "美元/枚",
     "DINIW": "点",
 }
+
+# 一批最多带多少个品种。
+# 新浪的 list= 拼在 URL 里，品种涨到 50 多个以后 URL 会偏长；
+# 拆成两批并发取比压着一个超长 URL 更稳，成本也只是多一个请求。
+MACRO_CHUNK_SIZE = 40
 
 
 def macro_group_of(symbol: str) -> str:
@@ -243,6 +281,9 @@ class Settings:
     )
     indexes: list[str] = field(default_factory=lambda: list(DEFAULT_INDEXES))
     macro_symbols: list[str] = field(default_factory=lambda: default_macro_symbols())
+    macro_chunk_size: int = field(
+        default_factory=lambda: _env_int("ASHARE_WATCH_MACRO_CHUNK_SIZE", MACRO_CHUNK_SIZE)
+    )
 
     data_dir: Path = field(
         default_factory=lambda: Path(os.getenv("ASHARE_WATCH_DATA_DIR", PROJECT_ROOT / "data"))

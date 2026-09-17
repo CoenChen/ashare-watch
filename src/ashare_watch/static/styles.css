@@ -454,13 +454,31 @@ button.loading::after {
 .macro-groups { display: grid; gap: 15px; }
 .macro-group { display: grid; gap: 8px; }
 .macro-group-label {
+  width: 100%; padding: 4px 0; background: none; border: 0;
+  font-family: inherit;
   font-size: 11.5px; color: var(--muted); letter-spacing: .6px;
   display: flex; align-items: center; gap: 8px;
+  cursor: pointer; text-align: left;
 }
+.macro-group-label:hover { color: var(--text-2); border-color: transparent; transform: none; }
 .macro-group-label::after {
   content: ""; flex: 1; height: 1px;
   background: linear-gradient(90deg, var(--border), transparent);
 }
+/* 收起/展开的三角。用 CSS 画，省一个图标文件 */
+.macro-group-label .chev {
+  width: 0; height: 0; flex: none;
+  border-left: 4px solid transparent;
+  border-right: 4px solid transparent;
+  border-top: 5px solid currentColor;
+  transition: transform .18s ease;
+}
+.macro-group.collapsed .macro-group-label .chev { transform: rotate(-90deg); }
+.macro-group-label .gl-count {
+  font-variant-numeric: tabular-nums; opacity: .65;
+  padding: 0 2px;
+}
+.macro-group.collapsed .macro-cards { display: none; }
 .macro-cards {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(min(172px, 100%), 1fr));

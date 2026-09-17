@@ -272,8 +272,45 @@ function renderHistory() {
  *  否则美元人民币会显示成一潭死水。
  */
 const MACRO_ORDER = [
-  "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指", "外汇",
+  "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "化工", "农产品",
+  "海外股指", "外汇", "数字货币",
 ];
+
+/* 品种涨到五十多个以后，面板会长到一屏半；分组标题点一下就能收起来，
+   收起的是哪几组记在浏览器里，下次打开还是收起的状态。 */
+const MACRO_COLLAPSED_KEY = "ashare-watch:macro-collapsed";
+
+function loadCollapsedGroups() {
+  try {
+    const raw = localStorage.getItem(MACRO_COLLAPSED_KEY);
+    const list = raw ? JSON.parse(raw) : [];
+    return new Set(Array.isArray(list) ? list.filter((g) => typeof g === "string") : []);
+  } catch (error) {
+    return new Set();
+  }
+}
+
+function saveCollapsedGroups() {
+  try {
+    localStorage.setItem(MACRO_COLLAPSED_KEY, JSON.stringify([...collapsedGroups]));
+  } catch (error) {
+    /* 存不进去就只在本次会话有效 */
+  }
+}
+
+const collapsedGroups = loadCollapsedGroups();
+
+function toggleMacroGroup(groupEl) {
+  const collapsed = groupEl.classList.toggle("collapsed");
+  if (collapsed) {
+    collapsedGroups.add(groupEl.dataset.group);
+  } else {
+    collapsedGroups.delete(groupEl.dataset.group);
+  }
+  groupEl.querySelector(".macro-group-label")
+    .setAttribute("aria-expanded", String(!collapsed));
+  saveCollapsedGroups();
+}
 
 function renderMacro(macro) {
   const host = $("macro-groups");
@@ -316,12 +353,22 @@ function renderMacro(macro) {
           </div>`;
         })
         .join("");
-      return `<div class="macro-group">
-        <div class="macro-group-label">${esc(group)}</div>
+      const items = grouped.get(group);
+      const collapsed = collapsedGroups.has(group);
+      return `<div class="macro-group ${collapsed ? "collapsed" : ""}" data-group="${esc(group)}">
+        <button type="button" class="macro-group-label" aria-expanded="${!collapsed}">
+          <span class="chev" aria-hidden="true"></span>
+          <span>${esc(group)}</span>
+          <span class="gl-count">${items.length}</span>
+        </button>
         <div class="macro-cards">${cards}</div>
       </div>`;
     })
     .join("");
+
+  host.querySelectorAll(".macro-group-label").forEach((btn) => {
+    btn.addEventListener("click", () => toggleMacroGroup(btn.closest(".macro-group")));
+  });
 
   $("macro-note").textContent = `${macro.length} 个品种`;
 }

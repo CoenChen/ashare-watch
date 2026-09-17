@@ -10,6 +10,7 @@ from __future__ import annotations
 from ashare_watch.client import SinaClient
 from ashare_watch.config import (
     MACRO_GROUPS,
+    MACRO_CHUNK_SIZE,
     MACRO_UNITS,
     Settings,
     default_macro_symbols,
@@ -144,7 +145,8 @@ def test_macro_config_is_consistent():
         assert macro_name_of(code) == name
         assert macro_group_of(code) in MACRO_GROUPS
     assert set(MACRO_GROUPS) == {
-        "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指", "外汇",
+        "贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "化工", "农产品",
+        "海外股指", "外汇", "数字货币",
     }
 
 
@@ -170,19 +172,33 @@ def test_macro_covers_index_futures_for_overnight_sentiment():
     assert {"标普500期货", "纳指100期货", "道指期货", "恒指期货", "富时A50期货"} <= index_names
 
 
+def test_macro_covers_domestic_commodity_chains():
+    """国内期货要覆盖几条主要的产业链，而不是只放一两个装样子。"""
+    assert {"螺纹钢", "铁矿石", "焦煤", "焦炭"} <= {n for _, n in MACRO_GROUPS["黑色系"]}
+    assert {"PTA", "甲醇", "纯碱"} <= {n for _, n in MACRO_GROUPS["化工"]}
+    assert {"豆粕", "郑棉", "白糖"} <= {n for _, n in MACRO_GROUPS["农产品"]}
+
+
 def test_every_macro_symbol_has_a_unit_or_is_an_fx_pair():
     """贵金属/能源/基本金属必须标注计价单位，否则看不出量级是否正常。
     汇率本身没有单位，允许为空。"""
-    for group in ("贵金属", "国内贵金属", "能源", "基本金属", "黑色系", "海外股指"):
+    for group in ("贵金属", "国内贵金属", "能源", "基本金属", "黑色系",
+                  "化工", "农产品", "海外股指", "数字货币"):
         for code, name in MACRO_GROUPS[group]:
             assert MACRO_UNITS.get(code), f"{name}({code}) 缺少计价单位"
 
 
-def test_macro_symbols_fit_in_one_request():
-    """全部品种要能塞进一次批量请求，不然首屏会变慢。"""
+def test_macro_batches_stay_short_enough():
+    """每一批的 list= 都不能太长。
+
+    新浪的 ``list=`` 拼在 URL 里，五十多个代码压成一条超长 URL 有被截断的风险，
+    所以客户端会按 MACRO_CHUNK_SIZE 拆分。这条测试保证拆完之后每一批都是短 URL。
+    """
     symbols = default_macro_symbols()
     assert len(symbols) <= 60
-    assert len(",".join(symbols)) < 400, "查询串太长，新浪的 list= 有长度限制"
+    for start in range(0, len(symbols), MACRO_CHUNK_SIZE):
+        batch = symbols[start : start + MACRO_CHUNK_SIZE]
+        assert len(",".join(batch)) < 400, "查询串太长，新浪的 list= 有长度限制"
 
 
 def test_macro_group_lookup_covers_every_symbol():
@@ -231,3 +247,37 @@ def test_macro_request_failure_returns_empty():
     client = SinaClient(Settings(data_dir="/tmp/ashare-watch-test"))
     client._request = lambda host, path, params=None: None  # type: ignore[assignment]
     assert client.macro_quotes() == []
+
+
+def test_macro_quotes_splits_long_lists_into_short_batches():
+    """品种多起来以后要自动分批，不能拼出一条超长 URL。"""
+    client = SinaClient(Settings(data_dir="/tmp/ashare-watch-test"))
+    seen: list[str] = []
+
+    def fake_request(host, path, params=None):
+        seen.append(path)
+        return None
+
+    client._request = fake_request  # type: ignore[assignment]
+    client.macro_quotes([f"hf_T{i}" for i in range(95)])
+
+    assert len(seen) == 3                     # 95 个按 40 一批切成 3 批
+    assert all(len(path) < 400 for path in seen)
+    assert all(path.startswith("/list=") for path in seen)
+
+
+def test_macro_quotes_merges_every_batch_and_keeps_order():
+    client = SinaClient(Settings(data_dir="/tmp/ashare-watch-test"))
+
+    def fake_request(host, path, params=None):
+        batch = path[len("/list=") :].split(",")
+        text = "\n".join(
+            f'var hq_str_{symbol}="' + ",".join(HF_GOLD) + '";' for symbol in batch
+        )
+        return text.encode("gbk")
+
+    client._request = fake_request  # type: ignore[assignment]
+    symbols = ["hf_XAU"] + [f"hf_T{i}" for i in range(50)]
+    quotes = client.macro_quotes(symbols)
+
+    assert [q.symbol for q in quotes] == symbols, "返回顺序要跟配置顺序一致"
