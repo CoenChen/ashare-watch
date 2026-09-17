@@ -108,11 +108,14 @@
     </section>
   </div>
 
-  <!-- 环球市场：黄金 / 原油 / 基本金属 / 外汇 -->
+  <!-- 环球市场：分组可收起，品种多的时候不至于把页面占满 -->
   <section class="panel">
     <div class="panel-head">
       <h3>环球市场 <span class="sub">影响 A 股的外部变量</span></h3>
-      <span class="chip ghost" id="macro-note">—</span>
+      <div class="macro-actions">
+        <span class="chip ghost" id="macro-note">—</span>
+        <button id="macro-toggle" class="ghost-btn" type="button">全部收起</button>
+      </div>
     </div>
     <div id="macro-groups" class="macro-groups"></div>
   </section>

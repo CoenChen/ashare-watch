@@ -452,6 +452,7 @@ button.loading::after {
 .watch-card.pending .px { color: var(--muted); font-weight: 500; }
 
 .macro-groups { display: grid; gap: 15px; }
+.macro-actions { display: flex; align-items: center; gap: 8px; }
 .macro-group { display: grid; gap: 8px; }
 .macro-group-label {
   width: 100%; padding: 4px 0; background: none; border: 0;

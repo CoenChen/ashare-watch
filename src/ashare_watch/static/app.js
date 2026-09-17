@@ -310,6 +310,40 @@ function toggleMacroGroup(groupEl) {
   groupEl.querySelector(".macro-group-label")
     .setAttribute("aria-expanded", String(!collapsed));
   saveCollapsedGroups();
+  syncMacroToggle();
+}
+
+/** 「全部收起 / 全部展开」。面板有五十多个品种时会很长，给一个一键开关。 */
+function bindMacroToggle() {
+  const btn = $("macro-toggle");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const groups = [...document.querySelectorAll("#macro-groups .macro-group")];
+    if (!groups.length) return;
+    const collapseAll = !groups.every((g) => g.classList.contains("collapsed"));
+    groups.forEach((group) => {
+      if (collapseAll) {
+        collapsedGroups.add(group.dataset.group);
+      } else {
+        collapsedGroups.delete(group.dataset.group);
+      }
+      group.classList.toggle("collapsed", collapseAll);
+      group.querySelector(".macro-group-label")
+        .setAttribute("aria-expanded", String(!collapseAll));
+    });
+    saveCollapsedGroups();
+    syncMacroToggle();
+  });
+  syncMacroToggle();
+}
+
+function syncMacroToggle() {
+  const btn = $("macro-toggle");
+  if (!btn) return;
+  const groups = [...document.querySelectorAll("#macro-groups .macro-group")];
+  const allCollapsed = groups.length > 0
+    && groups.every((g) => g.classList.contains("collapsed"));
+  btn.textContent = allCollapsed ? "全部展开" : "全部收起";
 }
 
 function renderMacro(macro) {
@@ -371,6 +405,7 @@ function renderMacro(macro) {
   });
 
   $("macro-note").textContent = `${macro.length} 个品种`;
+  syncMacroToggle();
 }
 
 function renderSectors(sectors) {
@@ -1036,6 +1071,7 @@ if (window.__SNAPSHOT__) {
   renderShareBanner(window.__SNAPSHOT__);
   updateCountdown();
   bindSearch();
+  bindMacroToggle();
   renderFollow();
   loadSearchIndex().then(refreshFollowQuotes);
 } else {
@@ -1046,6 +1082,7 @@ if (window.__SNAPSHOT__) {
     updateCountdown();
   }, 1_000);
   bindSearch();
+  bindMacroToggle();
   renderFollow();
   // 搜索索引跟着全市场快照走（服务端 TTL 4 分钟），5 分钟取一次足够
   loadSearchIndex().then(refreshFollowQuotes);
