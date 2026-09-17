@@ -69,8 +69,9 @@ def build_standalone_html(
     )
     html = html.replace(
         "</body>",
-        f"<!-- 导出于 {datetime.now().astimezone().isoformat(timespec='seconds')} "
-        f"· 数据时间 {snapshot.get('fetched_at', '')} -->\n</body>",
+        # 只写数据时间，不写「导出于当前时刻」：同一份快照应该产出**完全相同**的
+        # 文件，否则每次构建都会产生一行无意义的 diff（实测就是这样）。
+        f"<!-- 数据时间 {snapshot.get('fetched_at', '')} -->\n</body>",
         1,
     )
     return html
@@ -86,6 +87,10 @@ def export_snapshot(
     settings.ensure_dirs()
     target = settings.export_path
     target.write_text(
-        build_standalone_html(snapshot, search_index=search_index), encoding="utf-8"
+        build_standalone_html(snapshot, search_index=search_index),
+        encoding="utf-8",
+        # 显式写 LF：.gitattributes 要求 eol=lf，如果这里跟着 Windows 写成 CRLF，
+        # 每次构建后 git 都会把文件标成「已修改」，产生无意义的 diff。
+        newline="\n",
     )
     return target

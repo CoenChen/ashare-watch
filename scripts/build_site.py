@@ -74,8 +74,10 @@ def main(argv: list[str]) -> int:
 
     html = build_standalone_html(data, title="A 股行情快照", search_index=search_index)
     target = out_dir / "index.html"
-    target.write_text(html, encoding="utf-8")
-    (out_dir / ".nojekyll").write_text(NOJEKYLL, encoding="utf-8")
+    # 显式写 LF，和 .gitattributes 的 eol=lf 保持一致，
+    # 否则每次构建后 git 都会把 index.html 标成「已修改」。
+    target.write_text(html, encoding="utf-8", newline="\n")
+    (out_dir / ".nojekyll").write_text(NOJEKYLL, encoding="utf-8", newline="\n")
 
     size_kb = target.stat().st_size / 1024
     coverage = data.get("coverage", {})

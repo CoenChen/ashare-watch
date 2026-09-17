@@ -208,6 +208,7 @@ class Collector:
                 self.settings.search_index_path.write_text(
                     json.dumps(rows, ensure_ascii=False, separators=(",", ":")),
                     encoding="utf-8",
+                    newline="\n",
                 )
             except OSError as error:
                 LOGGER.warning("搜索索引缓存写入失败：%s", error)

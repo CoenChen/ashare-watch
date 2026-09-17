@@ -105,6 +105,13 @@ class SinaClient:
         self.last_universe_expected = 0
         self.last_universe_got = 0
         self.last_completeness = 1.0
+        # 连续失败计数：断网时用它熔断，避免把 56 页全试一遍再退回缓存。
+        # 每个请求失败要重试 3 次并退避，56 页累计能拖到两分钟以上。
+        self._failure_streak = 0
+
+    @property
+    def failure_streak(self) -> int:
+        return self._failure_streak
 
     @property
     def pool(self) -> ThreadPoolExecutor:
@@ -176,14 +183,19 @@ class SinaClient:
                         break
                 else:
                     self.stats["bytes"] += len(raw)
+                    self._failure_streak = 0
                     return raw
             except (http.client.HTTPException, urllib.error.URLError, TimeoutError,
                     OSError, ssl.SSLError) as error:
                 last_error = f"{type(error).__name__}: {error}"
                 self._drop_connection(host)
+            # 已经连续失败很多次，多半是断网或被限流，剩下的重试只是白等
+            if self._failure_streak >= 5:
+                break
             if attempt < self.settings.retries - 1:
                 time.sleep(0.8 * (2**attempt))
 
+        self._failure_streak += 1
         self.stats["failures"] += 1
         LOGGER.warning("请求失败 %s%s（%s）", host, target[:90], last_error)
         return None
@@ -400,7 +412,11 @@ class SinaClient:
 
         if delay:
             slow_missing: list[int] = []
-            for page in page_list:
+            for index, page in enumerate(page_list):
+                # 熔断：前面已经连续失败很多次，这一轮剩下的页没必要再试
+                if self._failure_streak >= 5:
+                    slow_missing.extend(page_list[index:])
+                    break
                 try:
                     rows = self.universe_page(page, "changepercent", 0)
                 except Exception as error:  # noqa: BLE001
@@ -419,7 +435,7 @@ class SinaClient:
             for page in page_list
         }
         missing: list[int] = []
-        for page in page_list:
+        for index, page in enumerate(page_list):
             try:
                 rows = futures[page].result()
             except Exception as error:  # noqa: BLE001
@@ -427,6 +443,12 @@ class SinaClient:
                 rows = []
             if not rows:
                 missing.append(page)
+                # 熔断：连续失败说明网络不通或被限流。把剩余页直接标记为缺失，
+                # 而不是让 56 页各自重试三遍——实测那样能拖到两分钟以上。
+                if self._failure_streak >= 5:
+                    missing.extend(page_list[index + 1 :])
+                    LOGGER.warning("连续失败达 %d 次，中止本轮全市场抓取", self._failure_streak)
+                    break
                 continue
             for quote in rows:
                 merged[quote.code] = quote
