@@ -2,29 +2,30 @@ name: 更新行情快照并发布到 Pages
 
 on:
   # 定时更新。GitHub Actions 的 cron 用 UTC，北京时间要减 8 小时。
-  # 下面这几个时间对应 A 股：开盘后、上午收盘前、午盘、尾盘、收盘后。
+  # 对应 A 股：开盘后、上午收盘前、午盘、尾盘、收盘后。
   schedule:
     - cron: "40 1 * * 1-5"   # 北京时间 09:40
     - cron: "50 3 * * 1-5"   # 北京时间 11:50
     - cron: "10 5 * * 1-5"   # 北京时间 13:10
     - cron: "45 6 * * 1-5"   # 北京时间 14:45
     - cron: "30 7 * * 1-5"   # 北京时间 15:30（收盘定稿）
-  # 允许在仓库页面手动触发
   workflow_dispatch:
 
+# 只读仓库：这个工作流不再往 main 分支写任何东西。
+# 见文件末尾的说明——这正是之前推送冲突的根因。
 permissions:
-  contents: write
+  contents: read
+  pages: write
+  id-token: write
 
-# 同一时间只跑一个，避免几次定时撞在一起互相覆盖
 concurrency:
-  group: pages-snapshot
+  group: pages
   cancel-in-progress: false
 
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
     timeout-minutes: 15
-
     steps:
       - uses: actions/checkout@v4
 
@@ -37,27 +38,31 @@ jobs:
 
       - name: 抓取行情并构建站点
         id: build
-        # 抓取可能因为网络或接口限流失败。这一步失败**不应该**让整个流程报红，
-        # 更不应该把线上页面换成空白——下面会跳过提交，线上保留上一次的数据。
+        # 抓取可能因网络或接口限流失败。这一步失败不该让整个流程报红。
         continue-on-error: true
-        run: python scripts/build_site.py --out docs --refresh
+        run: python scripts/build_site.py --out site --refresh
 
-      - name: 抓取失败时的处理
+      - name: 抓取失败时退回仓库里的快照
         if: steps.build.outcome != 'success'
         run: |
-          echo "::warning::本次抓取失败，跳过发布，线上保留上一次的快照"
-          echo "SKIPPED=1" >> "$GITHUB_ENV"
+          echo "::warning::本次抓取失败，改用仓库中已有的 docs/index.html 发布"
+          mkdir -p site
+          cp docs/index.html site/index.html
+          touch site/.nojekyll
 
-      - name: 提交更新后的快照
-        if: env.SKIPPED != '1'
-        run: |
-          git config user.name  "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/index.html docs/.nojekyll
-          if git diff --cached --quiet; then
-            echo "数据没有变化，无需提交"
-          else
-            git commit -m "chore(snapshot): 更新行情快照 $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
-          fi
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
 

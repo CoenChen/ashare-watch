@@ -64,6 +64,7 @@ class Collector:
             symbol: pool.submit(self.client.index_history, symbol, 250) for symbol in index_symbols
         }
         sectors_future = pool.submit(self.client.sectors)
+        macro_future = pool.submit(self.client.macro_quotes)
         universe_future = pool.submit(self.client.universe) if include_universe else None
 
         quotes = quotes_future.result()
@@ -93,6 +94,14 @@ class Collector:
             LOGGER.warning("行业板块抓取失败：%s", error)
             sectors = []
             warnings.append("行业板块数据抓取失败")
+
+        try:
+            macro = macro_future.result()
+        except Exception as error:  # noqa: BLE001
+            LOGGER.warning("环球市场抓取失败：%s", error)
+            macro = []
+        if not macro:
+            warnings.append("环球市场数据抓取失败（黄金 / 原油 / 外汇不可用）")
 
         universe = []
         if universe_future is not None:
@@ -139,6 +148,7 @@ class Collector:
             most_active=most_active,
             turnover_leaders=turnover_leaders,
             sectors=sectors,
+            macro=macro,
             breadth=breadth,
             limits=limits,
             coverage={
@@ -146,6 +156,7 @@ class Collector:
                 "watchlist": len(watchlist),
                 "indexes": len(indexes),
                 "sectors": len(sectors),
+                "macro": len(macro),
             },
             index_history=self.client.index_history("sh000001", 250),
             warnings=warnings,

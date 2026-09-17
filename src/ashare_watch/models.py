@@ -77,6 +77,49 @@ class MarketStatus:
 
 
 @dataclass(slots=True)
+class MacroQuote:
+    """环球市场行情（黄金、原油、外汇、基本金属）。
+
+    单独一个结构而不是复用 ``Quote``，因为两者的语义差别不小：
+
+    * 这些品种**没有涨跌停**，方向判断只看涨跌；
+    * 它们的**小数位差别很大**——美元指数 100.16 要 2 位，
+      美元人民币 6.7065 要 4 位，用同一套格式会很难看；
+    * 需要**计价单位**（美元/盎司、美元/桶、美元/吨），
+      否则单看数字判断不了量级是否正常。
+    """
+
+    symbol: str
+    name: str = ""
+    group: str = ""
+    price: float | None = None
+    change: float | None = None
+    change_pct: float | None = None
+    prev_close: float | None = None
+    high: float | None = None
+    low: float | None = None
+    unit: str = ""
+    digits: int = 2
+    time: str = ""
+    date: str = ""
+
+    @property
+    def direction(self) -> str:
+        if self.change_pct is None:
+            return "flat"
+        if self.change_pct > 0.0001:
+            return "up"
+        if self.change_pct < -0.0001:
+            return "down"
+        return "flat"
+
+    def to_dict(self) -> dict[str, Any]:
+        data = asdict(self)
+        data["direction"] = self.direction
+        return data
+
+
+@dataclass(slots=True)
 class SectorStat:
     """行业板块统计，直接采用新浪官方行业分类的涨跌幅。"""
 
@@ -107,6 +150,7 @@ class Snapshot:
     most_active: list[Quote] = field(default_factory=list)
     turnover_leaders: list[Quote] = field(default_factory=list)
     sectors: list[SectorStat] = field(default_factory=list)
+    macro: list[MacroQuote] = field(default_factory=list)
     breadth: dict[str, int] = field(default_factory=dict)
     limits: dict[str, int] = field(default_factory=dict)
     coverage: dict[str, int] = field(default_factory=dict)
@@ -126,6 +170,7 @@ class Snapshot:
             "most_active": [q.to_dict() for q in self.most_active],
             "turnover_leaders": [q.to_dict() for q in self.turnover_leaders],
             "sectors": [s.to_dict() for s in self.sectors],
+            "macro": [m.to_dict() for m in self.macro],
             "breadth": self.breadth,
             "limits": self.limits,
             "coverage": self.coverage,

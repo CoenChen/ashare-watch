@@ -16,7 +16,10 @@ import re
 
 NULL_TOKENS = {"", "--", "-", "null", "None", "N/A"}
 
-_SINA_LINE = re.compile(r'var\s+hq_str_([a-z]{2}\d{6})="([^"]*)"')
+# 代码格式不止一种：A 股是 sh600519，外盘期货是 hf_XAU，外汇是 fx_susdcny，
+# 美元指数干脆就是 DINIW。所以这里放宽成「字母数字下划线」，
+# 不能再用 [a-z]{2}\d{6} 这种只管 A 股的写法。
+_SINA_LINE = re.compile(r'var\s+hq_str_([A-Za-z0-9_]+)="([^"]*)"')
 _JS_OBJECT = re.compile(r"=\s*(\{.*\})\s*;?\s*$", re.S)
 
 
@@ -199,6 +202,73 @@ def parse_js_object(text: str) -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 # 展示格式化
 # --------------------------------------------------------------------------- #
+def macro_fields(symbol: str, fields: list[str]) -> dict[str, object]:
+    """解析环球市场行情。
+
+    新浪对这三类品种用了**三套完全不同的字段布局**，而且都是按位置取的，
+    没有字段名。下面每一段注释都标了实测的字段位置，改的时候照着对：
+
+    **外盘期货（``hf_`` 前缀）**——黄金、原油、伦铜::
+
+        0 现价 | 4 最高 | 5 最低 | 6 时间 | 7 昨收 | 8 今开 | 12 日期 | 13 名称
+
+    **外汇即期（``fx_s`` 前缀）**——自带涨跌幅，不用自己算::
+
+        0 时间 | 3 昨收 | 6 最高 | 7 最低 | 8 现价 | 9 名称 | 10 涨跌幅% | 11 涨跌额
+
+    **简化版**——美元指数（``DINIW``）走的是这一套，没有涨跌幅字段::
+
+        0 时间 | 3 昨收 | 6 最高 | 7 最低 | 8 现价 | 9 名称 | 末位 日期
+    """
+
+    def at(index: int) -> str | None:
+        return fields[index] if len(fields) > index else None
+
+    if symbol.lower().startswith("hf_"):
+        price = parse_number(at(0))
+        prev_close = parse_number(at(7))
+        return {
+            "name": (at(13) or "").strip(),
+            "price": price,
+            "prev_close": prev_close,
+            "open": parse_number(at(8)),
+            "high": parse_number(at(4)),
+            "low": parse_number(at(5)),
+            "time": (at(6) or "").strip(),
+            "date": (at(12) or "").strip(),
+        }
+
+    # 外汇：第 10/11 位直接给了涨跌幅与涨跌额，比自己算更准
+    has_change = symbol.lower().startswith("fx_s")
+    last = fields[-1].strip() if fields else ""
+    return {
+        "name": (at(9) or "").strip(),
+        "price": parse_number(at(8)),
+        "prev_close": parse_number(at(3)),
+        "high": parse_number(at(6)),
+        "low": parse_number(at(7)),
+        "change": parse_number(at(11)) if has_change else None,
+        "change_pct": parse_number(at(10)) if has_change else None,
+        "time": (at(0) or "").strip(),
+        "date": last if re.fullmatch(r"\d{4}-\d{2}-\d{2}", last) else "",
+    }
+
+
+def digits_for(price: float | None) -> int:
+    """按量级决定小数位。
+
+    美元人民币是 6.7065（要 4 位才看得出变化），黄金是 4362.56（2 位就够）。
+    统一用一个格式会让汇率看起来像一潭死水。
+    """
+    if price is None:
+        return 2
+    if abs(price) < 10:
+        return 4
+    if abs(price) < 100:
+        return 3
+    return 2
+
+
 def format_money(value: float | None) -> str:
     """把元换算成中文习惯的量级：1.23 万亿 / 45.6 亿 / 789.0 万。"""
     if value is None:

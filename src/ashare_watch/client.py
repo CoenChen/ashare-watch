@@ -33,11 +33,19 @@ import urllib.error
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor
 
-from ashare_watch.config import Settings, get_settings
+from ashare_watch.config import (
+    MACRO_UNITS,
+    Settings,
+    get_settings,
+    macro_group_of,
+    macro_name_of,
+)
 from ashare_watch.market import board_of, detect_limit, is_st
-from ashare_watch.models import Quote, SectorStat
+from ashare_watch.models import MacroQuote, Quote, SectorStat
 from ashare_watch.structure import (
     decode_gbk,
+    digits_for,
+    macro_fields,
     parse_js_object,
     parse_json_array,
     parse_number,
@@ -427,6 +435,55 @@ class SinaClient:
     # ------------------------------------------------------------------ #
     # 行业板块
     # ------------------------------------------------------------------ #
+    def macro_quotes(self, symbols: list[str] | None = None) -> list[MacroQuote]:
+        """环球市场行情：黄金、原油、基本金属、外汇。
+
+        和 A 股行情同一个域名，所以一次批量请求就能全拿到，只是**解析规则不同**
+        （外盘期货、外汇、美元指数是三套字段布局，见 ``structure.macro_fields``）。
+        """
+        symbols = list(symbols or self.settings.macro_symbols)
+        if not symbols:
+            return []
+        raw = self._request(HOST_QUOTE, "/list=" + ",".join(symbols))
+        if not raw:
+            return []
+        parsed = parse_sina_quotes(decode_gbk(raw))
+
+        out: list[MacroQuote] = []
+        for symbol in symbols:
+            fields = parsed.get(symbol)
+            if not fields:
+                continue
+            data = macro_fields(symbol, fields)
+            price = data.get("price")
+            prev_close = data.get("prev_close")
+            change = data.get("change")
+            change_pct = data.get("change_pct")
+            # 外汇接口自带涨跌幅；外盘期货和美元指数只给昨收，需要自己算
+            if change is None and price is not None and prev_close:
+                change = round(price - prev_close, 6)
+            if change_pct is None and change is not None and prev_close:
+                change_pct = round(change / prev_close * 100, 4)
+
+            out.append(
+                MacroQuote(
+                    symbol=symbol,
+                    name=macro_name_of(symbol),
+                    group=macro_group_of(symbol),
+                    price=price,          # type: ignore[arg-type]
+                    change=change,        # type: ignore[arg-type]
+                    change_pct=change_pct,  # type: ignore[arg-type]
+                    prev_close=prev_close,  # type: ignore[arg-type]
+                    high=data.get("high"),  # type: ignore[arg-type]
+                    low=data.get("low"),    # type: ignore[arg-type]
+                    unit=MACRO_UNITS.get(symbol, ""),
+                    digits=digits_for(price),  # type: ignore[arg-type]
+                    time=str(data.get("time") or ""),
+                    date=str(data.get("date") or ""),
+                )
+            )
+        return out
+
     def sectors(self) -> list[SectorStat]:
         """新浪官方行业分类的板块涨跌幅。
 

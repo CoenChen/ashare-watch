@@ -41,6 +41,66 @@ DEFAULT_INDEXES: tuple[str, ...] = (
     "sh000300",  # 沪深300
 )
 
+# 环球市场：影响 A 股的外部变量。
+# 分组展示，因为这几类对 A 股的传导路径完全不同：
+#   贵金属   → 避险情绪、黄金股
+#   能源     → 石油石化、航空、化工成本
+#   基本金属 → 有色板块、制造业成本
+#   外汇     → 外资流向、出口链、美元流动性
+MACRO_GROUPS: dict[str, tuple[tuple[str, str], ...]] = {
+    "贵金属": (
+        ("hf_XAU", "伦敦金"),
+        ("hf_GC", "纽约黄金"),
+        ("hf_SI", "纽约白银"),
+    ),
+    "能源": (
+        ("hf_CL", "WTI 原油"),
+        ("hf_OIL", "布伦特原油"),
+    ),
+    "基本金属": (
+        ("hf_CAD", "伦铜"),
+    ),
+    "外汇": (
+        ("DINIW", "美元指数"),
+        ("fx_susdcny", "美元人民币"),
+        ("fx_seurusd", "欧元美元"),
+        ("fx_susdjpy", "美元日元"),
+    ),
+}
+
+
+def default_macro_symbols() -> list[str]:
+    """把分组拍平成一个代码列表，用于一次批量请求。"""
+    return [symbol for group in MACRO_GROUPS.values() for symbol, _ in group]
+
+
+# 计价单位。黄金看的是美元/盎司，原油看美元/桶，伦铜看美元/吨——
+# 不写清楚单位，光一个数字看不出量级是否正常。
+MACRO_UNITS: dict[str, str] = {
+    "hf_XAU": "美元/盎司",
+    "hf_GC": "美元/盎司",
+    "hf_SI": "美元/盎司",
+    "hf_CL": "美元/桶",
+    "hf_OIL": "美元/桶",
+    "hf_CAD": "美元/吨",
+    "DINIW": "点",
+}
+
+
+def macro_group_of(symbol: str) -> str:
+    for group, items in MACRO_GROUPS.items():
+        if any(item[0] == symbol for item in items):
+            return group
+    return "其他"
+
+
+def macro_name_of(symbol: str) -> str:
+    for items in MACRO_GROUPS.values():
+        for code, name in items:
+            if code == symbol:
+                return name
+    return symbol
+
 
 def _env_int(name: str, default: int) -> int:
     raw = os.getenv(name)
@@ -111,6 +171,7 @@ class Settings:
         default_factory=lambda: _env_symbols("ASHARE_WATCH_SYMBOLS") or list(DEFAULT_SYMBOLS)
     )
     indexes: list[str] = field(default_factory=lambda: list(DEFAULT_INDEXES))
+    macro_symbols: list[str] = field(default_factory=lambda: default_macro_symbols())
 
     data_dir: Path = field(
         default_factory=lambda: Path(os.getenv("ASHARE_WATCH_DATA_DIR", PROJECT_ROOT / "data"))

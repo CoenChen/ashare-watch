@@ -264,6 +264,66 @@ function renderHistory() {
 }
 
 /* ------------------------------------------------------------ 行业板块 */
+/** 环球市场。按「贵金属 / 能源 / 基本金属 / 外汇」分组展示。
+ *
+ *  分组顺序固定，因为这四类对 A 股的传导路径不同：
+ *  黄金看避险，原油看石化与航空成本，伦铜看有色，外汇看外资流向。
+ *  数字用等宽字体对齐，小数位按各自量级决定（汇率 4 位、黄金 2 位），
+ *  否则美元人民币会显示成一潭死水。
+ */
+const MACRO_ORDER = ["贵金属", "能源", "基本金属", "外汇"];
+
+function renderMacro(macro) {
+  const host = $("macro-groups");
+  if (!macro || !macro.length) {
+    host.innerHTML = '<div class="empty">环球市场数据暂不可用。</div>';
+    $("macro-note").textContent = "—";
+    return;
+  }
+  const grouped = new Map();
+  macro.forEach((m) => {
+    const key = m.group || "其他";
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(m);
+  });
+  const order = [...MACRO_ORDER.filter((k) => grouped.has(k)),
+                 ...[...grouped.keys()].filter((k) => !MACRO_ORDER.includes(k))];
+
+  host.innerHTML = order
+    .map((group) => {
+      const cards = grouped
+        .get(group)
+        .map((m) => {
+          const d = m.direction;
+          const digits = m.digits ?? 2;
+          const price = m.price === null || m.price === undefined
+            ? "—"
+            : Number(m.price).toLocaleString("en-US", {
+                minimumFractionDigits: digits, maximumFractionDigits: digits,
+              });
+          return `<div class="macro-card ${d}">
+            <div class="mh">
+              <span class="mn">${esc(m.name)}</span>
+              <span class="mu">${esc(m.unit || "")}</span>
+            </div>
+            <div class="mp ${dirClass(d)}">${price}</div>
+            <div class="mc">
+              <span class="${dirClass(d)}">${signed(m.change, digits)}</span>
+              <span class="pct ${dirClass(d)}">${pct(m.change_pct)}</span>
+            </div>
+          </div>`;
+        })
+        .join("");
+      return `<div class="macro-group">
+        <div class="macro-group-label">${esc(group)}</div>
+        <div class="macro-cards">${cards}</div>
+      </div>`;
+    })
+    .join("");
+
+  $("macro-note").textContent = `${macro.length} 个品种`;
+}
+
 function renderSectors(sectors) {
   const host = $("sector-list");
   $("sector-count").textContent = sectors.length ? `${sectors.length} 个板块` : "—";
@@ -368,6 +428,7 @@ function render(snapshot) {
   renderLimits(snapshot);
   renderHistory();
   renderSectors(snapshot.sectors || []);
+  renderMacro(snapshot.macro || []);
   renderWatchlist(snapshot.watchlist || []);
   renderRank();
 }
