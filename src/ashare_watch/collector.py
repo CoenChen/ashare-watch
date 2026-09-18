@@ -67,6 +67,7 @@ class Collector:
         warnings: list[str] = []
         before_requests = self.client.stats["requests"]
         before_failures = self.client.stats["failures"]
+        before_limited = self.client.stats.get("rate_limited", 0)
 
         pool = self.client.pool
         index_symbols = list(self.settings.indexes)
@@ -132,9 +133,13 @@ class Collector:
                     f"{self.client.last_universe_expected} 只"
                     "（可能被接口限流，稍后会自动重试）"
                 )
-            if self.client.stats.get("rate_limited"):
+            # 注意要用「本次」的增量，不是累计值。stats 里的计数从进程启动开始
+            # 一直累加，直接读它会把一次限流说成永远存在，页面上那条警告就再也
+            # 消不掉了。
+            limited_now = self.client.stats.get("rate_limited", 0) - before_limited
+            if limited_now:
                 warnings.append(
-                    f"本次采集遇到 {self.client.stats['rate_limited']} 次接口限流，"
+                    f"本次采集遇到 {limited_now} 次接口限流，"
                     "已自动退避重试；如果频繁出现可以把 ASHARE_WATCH_WORKERS 调小"
                 )
 
