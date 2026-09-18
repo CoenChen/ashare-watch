@@ -202,6 +202,32 @@ def parse_js_object(text: str) -> dict[str, str]:
 # --------------------------------------------------------------------------- #
 # 展示格式化
 # --------------------------------------------------------------------------- #
+def orderbook_fields(fields: list[str]) -> dict[str, list[list[float]]]:
+    """解析买卖五档盘口。
+
+    个股行情里第 10–29 位就是五档，**量、价成对出现**：
+
+        10 买一量 | 11 买一价 | 12 买二量 | 13 买二价 | …… 18 买五量 | 19 买五价
+        20 卖一量 | 21 卖一价 | ……                          28 卖五量 | 29 卖五价
+
+    也就是说这份数据一直都在我们每次抓行情时返回的字段里，只是以前丢掉了，
+    不需要为了盘口多抓一次。指数没有这一段，返回空列表。
+    """
+    def number(index: int) -> float | None:
+        return parse_number(fields[index]) if len(fields) > index else None
+
+    bids: list[list[float]] = []
+    asks: list[list[float]] = []
+    for level in range(5):
+        bid_price = number(11 + level * 2)
+        ask_price = number(21 + level * 2)
+        if bid_price:
+            bids.append([bid_price, number(10 + level * 2) or 0.0])
+        if ask_price:
+            asks.append([ask_price, number(20 + level * 2) or 0.0])
+    return {"bids": bids, "asks": asks}
+
+
 def macro_fields(symbol: str, fields: list[str]) -> dict[str, object]:
     """解析环球市场行情。
 

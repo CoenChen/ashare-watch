@@ -48,6 +48,11 @@
 
 * { box-sizing: border-box; }
 
+/* 用 hidden 属性控制显隐时，别被组件自己的 display 值盖掉。
+   抽屉是 display:flex，不加这条的话 hidden 形同虚设——元素明明标了 hidden，
+   计算出来的 display 还是 flex，看起来「关不掉」。 */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -368,7 +373,9 @@ button.loading::after {
 
 .search-results {
   position: absolute; left: 0; right: 0; top: calc(100% + 8px);
-  z-index: 30;
+  /* 必须高于吸顶的导航（z-index 30）：搜索下拉是浮层，被导航条盖住的话
+     点到的就是导航而不是结果行。 */
+  z-index: 40;
   max-height: 62vh; overflow-y: auto;
   border-radius: var(--r-lg);
   border: 1px solid var(--border-hi);
@@ -591,6 +598,27 @@ button.loading::after {
 .tab { border: none; background: transparent; padding: 6px 15px; border-radius: 8px; color: var(--text-2); font-size: 12.5px; }
 .tab:hover { transform: none; background: rgba(148, 140, 180, .1); }
 .tab.active { color: #180a10; font-weight: 700; background: var(--brand-grad); }
+.tab { white-space: nowrap; }
+.tab-badge {
+  display: inline-block; margin-left: 6px; padding: 0 6px;
+  border-radius: 999px; font-size: 10.5px; font-weight: 700;
+  background: var(--accent); color: #180a10; font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------------------ 主导航 */
+.main-tabs {
+  position: sticky; top: 10px; z-index: 30;
+  flex-wrap: nowrap; overflow-x: auto; overscroll-behavior-x: contain;
+  background: rgba(16, 13, 28, .92);
+  backdrop-filter: blur(14px);
+  scrollbar-width: none;
+}
+.main-tabs::-webkit-scrollbar { display: none; }
+.main-tabs .tab { padding: 8px 16px; font-size: 13px; }
+
+/* 标签页面板：同一时间只显示一个，页面长度因此只有原来的一小截 */
+.tab-panel { display: none; grid-template-columns: minmax(0, 1fr); gap: 18px; }
+.tab-panel.is-active { display: grid; }
 
 .table-wrap { overflow-x: auto; }
 /* 表格给一个最小宽度，窄屏时由外层 .table-wrap 横向滚动，
@@ -618,6 +646,127 @@ button.loading::after {
   display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap;
   font-size: 11.5px; color: var(--muted); padding: 6px 4px 0;
 }
+
+/* ---------------------------------------------------------- 个股详情 */
+.scrim {
+  position: fixed; inset: 0; z-index: 90;
+  background: rgba(6, 4, 12, .62); backdrop-filter: blur(2px);
+  animation: fade-in .18s ease;
+}
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+.drawer {
+  position: fixed; top: 0; right: 0; bottom: 0; z-index: 91;
+  width: min(560px, 100%);
+  display: flex; flex-direction: column;
+  background: linear-gradient(180deg, #16122a, #100d1e 60%);
+  border-left: 1px solid var(--border-hi);
+  box-shadow: -30px 0 70px -40px #000;
+  animation: slide-in .2s ease;
+}
+@keyframes slide-in { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+
+.drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 14px; padding: 16px 18px 14px; border-bottom: 1px solid var(--border);
+}
+.dh-title { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.dh-title h3 { margin: 0; font-size: 17px; font-weight: 700; }
+.dh-code { font-family: var(--mono); font-size: 12.5px; color: var(--muted); }
+.dh-board {
+  padding: 1px 8px; border-radius: 999px; font-size: 11px;
+  color: var(--text-2); background: rgba(148, 140, 180, .12);
+  border: 1px solid var(--border);
+}
+.dh-price {
+  display: flex; align-items: baseline; gap: 10px; margin-top: 8px;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.dh-price strong { font-size: 26px; font-weight: 700; }
+.dh-price span { font-size: 13.5px; font-weight: 600; }
+.dh-actions { display: flex; align-items: center; gap: 6px; flex: none; }
+
+.icon-btn {
+  width: 30px; height: 30px; padding: 0; display: grid; place-items: center;
+  border-radius: 9px; font-size: 18px; line-height: 1; color: var(--text-2);
+}
+
+.drawer-body { flex: 1; overflow-y: auto; padding: 16px 18px 24px; display: grid; gap: 18px; align-content: start; }
+.drawer-foot { padding: 10px 18px 14px; border-top: 1px solid var(--border); font-size: 11px; color: var(--muted); }
+
+/* 抽屉打开时锁住背景滚动，否则手机上会「穿过」抽屉滚到后面那层 */
+body.drawer-open { overflow: hidden; }
+
+#detail-follow.on { color: var(--accent); border-color: var(--accent); }
+
+.detail-block { display: grid; gap: 9px; }
+.detail-block > h4 {
+  margin: 0; font-size: 12.5px; font-weight: 600; color: var(--text-2);
+  display: flex; align-items: center; gap: 8px;
+}
+.detail-block > h4::after {
+  content: ""; flex: 1; height: 1px;
+  background: linear-gradient(90deg, var(--border), transparent);
+}
+
+.kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(112px, 100%), 1fr)); gap: 8px; }
+.kv {
+  padding: 8px 10px; border-radius: var(--r-sm);
+  border: 1px solid var(--border); background: rgba(148, 140, 180, .05);
+  display: grid; gap: 3px;
+}
+.kv .k { font-size: 11px; color: var(--muted); }
+.kv .v { font-family: var(--mono); font-size: 13.5px; font-variant-numeric: tabular-nums; }
+
+/* 五档盘口 */
+.orderbook { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.ob-side { display: grid; gap: 4px; }
+.ob-side .ob-title { font-size: 11px; color: var(--muted); margin-bottom: 2px; }
+.ob-row {
+  position: relative; display: grid; grid-template-columns: 26px 1fr auto;
+  align-items: center; gap: 8px; padding: 4px 7px;
+  border-radius: 6px; overflow: hidden; font-family: var(--mono); font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+.ob-row .lv { color: var(--muted); font-size: 11px; }
+.ob-row .ob-bar { position: absolute; top: 0; bottom: 0; left: 0; opacity: .16; }
+.ob-row.bid .ob-bar { background: var(--up); }
+.ob-row.ask .ob-bar { background: var(--down); }
+.ob-row .ob-vol { color: var(--text-2); font-size: 11.5px; }
+
+/* 资金流向 */
+.flow-list { display: grid; gap: 6px; }
+.flow-row {
+  display: grid; grid-template-columns: 84px 1fr 88px 74px;
+  align-items: center; gap: 8px; font-size: 12.5px;
+  font-family: var(--mono); font-variant-numeric: tabular-nums;
+}
+.flow-row .d { color: var(--muted); }
+.flow-row .bar-track { position: relative; height: 8px; border-radius: 4px; background: rgba(148, 140, 180, .1); overflow: hidden; }
+.flow-row .bar { position: absolute; top: 0; bottom: 0; border-radius: 4px; }
+.flow-row .bar.up { background: var(--up); left: 50%; }
+.flow-row .bar.down { background: var(--down); right: 50%; }
+.flow-row .mid { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: rgba(236, 233, 245, .2); }
+
+.detail-note {
+  padding: 14px; border: 1px dashed var(--border); border-radius: var(--r-md);
+  color: var(--muted); font-size: 12.5px; line-height: 1.8;
+}
+.detail-loading { display: grid; place-items: center; gap: 10px; padding: 60px 0; color: var(--muted); font-size: 13px; }
+
+/* 轻量提示 */
+.toast {
+  position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+  z-index: 120; padding: 10px 18px; border-radius: 999px;
+  background: rgba(24, 20, 38, .96); border: 1px solid var(--border-hi);
+  color: var(--text); font-size: 13px; box-shadow: var(--shadow);
+  animation: toast-in .2s ease;
+}
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+
+/* 可点击的行情卡 / 榜单行 */
+.watch-card[data-code], .rank-table tbody tr[data-code] { cursor: pointer; }
+.rank-table tbody tr[data-code]:hover td { background: rgba(148, 140, 180, .08); }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 

@@ -178,3 +178,53 @@ class Snapshot:
             "warnings": self.warnings,
             "sources": self.sources,
         }
+
+
+def snapshot_from_dict(data: dict[str, Any]) -> Snapshot:
+    """把 JSON（也就是从 SQLite 读回来的快照）还原成 Snapshot 对象。
+
+    为什么要专门写这个：``Snapshot(**data)`` 看起来能用，但 ``market`` 在 JSON
+    里是普通 dict，而 ``Snapshot.to_dict()`` 里写的是 ``self.market.to_dict()``、
+    刷新调度里写的是 ``self.snapshot.market.is_open``——两处都会直接抛
+    AttributeError。表现是「刚启动的那一瞬间接口 500」，而且只有缓存快照被
+    真正用到时（第一次抓取还没回来的那几秒）才出现，非常难复现。
+    """
+    def items_of(key: str, cls: type) -> list:
+        return [
+            cls(**{k: v for k, v in item.items() if k in cls.__dataclass_fields__})
+            for item in (data.get(key) or [])
+            if isinstance(item, dict)
+        ]
+
+    market_data = data.get("market")
+    market = (
+        MarketStatus(
+            **{k: v for k, v in market_data.items() if k in MarketStatus.__dataclass_fields__}
+        )
+        if isinstance(market_data, dict)
+        else MarketStatus()
+    )
+
+    def mapping(key: str) -> dict:
+        value = data.get(key)
+        return dict(value) if isinstance(value, dict) else {}
+
+    return Snapshot(
+        fetched_at=str(data.get("fetched_at") or ""),
+        generated_ms=float(data.get("generated_ms") or 0.0),
+        market=market,
+        indexes=items_of("indexes", Quote),
+        watchlist=items_of("watchlist", Quote),
+        gainers=items_of("gainers", Quote),
+        losers=items_of("losers", Quote),
+        most_active=items_of("most_active", Quote),
+        turnover_leaders=items_of("turnover_leaders", Quote),
+        sectors=items_of("sectors", SectorStat),
+        macro=items_of("macro", MacroQuote),
+        breadth=mapping("breadth"),
+        limits=mapping("limits"),
+        coverage=mapping("coverage"),
+        index_history=list(data.get("index_history") or []),
+        warnings=[str(item) for item in (data.get("warnings") or [])],
+        sources=[str(item) for item in (data.get("sources") or [])],
+    )

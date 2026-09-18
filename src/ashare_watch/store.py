@@ -44,6 +44,17 @@ def _now() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
 
 
+def _age_seconds(stamp: str) -> float | None:
+    """``saved_at`` 距今多少秒。解析不了就返回 None（当作太旧处理）。"""
+    try:
+        saved = datetime.fromisoformat(stamp)
+    except (TypeError, ValueError):
+        return None
+    if saved.tzinfo is None:
+        saved = saved.replace(tzinfo=timezone.utc)
+    return (datetime.now(timezone.utc) - saved.astimezone(timezone.utc)).total_seconds()
+
+
 class SnapshotStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
@@ -90,7 +101,9 @@ class SnapshotStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def latest_complete_snapshot(self, *, min_universe: int = 1000) -> dict | None:
+    def latest_complete_snapshot(
+        self, *, min_universe: int = 1000, max_age_seconds: float | None = None
+    ) -> dict | None:
         """最近一份「全市场数据完整」的快照。
 
         抓取偶尔会**成功但只拿到一部分**：接口临时限流时，全市场那 56 页会
@@ -98,12 +111,20 @@ class SnapshotStore:
 
         对导出/兜底这种场景来说，一份「稍旧但完整」的快照远比「最新但空掉一半」
         有用——后者打开就是一个残缺页面，看的人会以为项目坏了。
+
+        ``max_age_seconds`` 用来限定"足够新"：本地看板正在跑的时候，store 里
+        通常已经有一份几分钟前刚抓好的完整数据，导出直接拿来用就行，
+        再翻一遍 56 页纯属白烧请求。
         """
         with self._lock:
             rows = self._connection.execute(
-                "SELECT payload FROM snapshots ORDER BY id DESC LIMIT 60"
+                "SELECT payload, saved_at FROM snapshots ORDER BY id DESC LIMIT 60"
             ).fetchall()
         for row in rows:
+            if max_age_seconds is not None:
+                age = _age_seconds(row["saved_at"])
+                if age is None or age > max_age_seconds:
+                    break  # 按时间倒序取，后面的只会更旧
             payload = json.loads(row["payload"])
             if (payload.get("coverage") or {}).get("universe", 0) >= min_universe:
                 return payload

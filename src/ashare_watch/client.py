@@ -46,6 +46,7 @@ from ashare_watch.structure import (
     decode_gbk,
     digits_for,
     macro_fields,
+    orderbook_fields,
     parse_js_object,
     parse_json_array,
     parse_number,
@@ -568,15 +569,26 @@ class SinaClient:
     # ------------------------------------------------------------------ #
     # 指数日线
     # ------------------------------------------------------------------ #
-    def index_history(self, symbol: str = "sh000001", days: int = 250) -> list[dict]:
-        """指数日线，用于画走势图和迷你走势。默认缓存 6 小时。"""
-        key = f"kline:{symbol}"
+    def kline(
+        self,
+        symbol: str,
+        *,
+        scale: int = 240,
+        days: int = 250,
+        ttl: float | None = None,
+        cache_key: str | None = None,
+    ) -> list[dict]:
+        """K 线。``scale`` 单位是分钟：240 是日线，5 是 5 分钟线。
+
+        服务端固定只取最近 ``days`` 根，避免一次拉太多。
+        """
+        key = cache_key or f"kline:{scale}:{symbol}"
 
         def produce() -> list[dict]:
             raw = self._request(
                 HOST_KLINE,
                 "/cn/api/json_v2.php/CN_MarketDataService.getKLineData",
-                {"symbol": symbol, "scale": 240, "ma": "no", "datalen": 250},
+                {"symbol": symbol, "scale": scale, "ma": "no", "datalen": days},
             )
             if not raw:
                 return []
@@ -601,8 +613,98 @@ class SinaClient:
                 )
             return out
 
-        rows = self._cached(key, self.settings.history_ttl, produce) or []
+        rows = self._cached(
+            key, self.settings.history_ttl if ttl is None else ttl, produce
+        ) or []
         return rows[-days:] if days < len(rows) else rows
+
+    def index_history(self, symbol: str = "sh000001", days: int = 250) -> list[dict]:
+        """指数日线，用于画走势图和迷你走势。默认缓存 6 小时。
+
+        抓 250 根、缓存 6 小时（key 沿用旧写法，方便复用已有缓存）。
+        """
+        return self.kline(symbol, scale=240, days=250, cache_key=f"kline:{symbol}")[-days:]
+
+    def moneyflow(self, symbol: str, days: int = 5) -> list[dict]:
+        """个股资金流向：最近几天的净流入和主力净额。
+
+        字段含义（新浪口径）：``netamount`` 净流入额、``r0_net`` 主力净额、
+        ``ratioamount`` 净流入占比、``turnover`` 换手率。
+        """
+        def produce() -> list[dict]:
+            raw = self._request(
+                HOST_VIP,
+                "/quotes_service/api/json_v2.php/MoneyFlow.ssl_qsfx_zjlrqs",
+                {"page": 1, "num": days, "sort": "opendate", "asc": 0, "daima": symbol},
+            )
+            if not raw:
+                return []
+            rows = parse_json_array(decode_gbk(raw))
+            out: list[dict] = []
+            for row in rows:
+                # 新浪这里的 changeratio 是**比值**（0.0068 表示 0.68%），
+                # 而页面上其它涨跌幅都是百分数，这里统一换算成百分数。
+                ratio = parse_number(row.get("changeratio"))
+                out.append(
+                    {
+                        "date": str(row.get("opendate") or ""),
+                        "close": parse_number(row.get("trade")),
+                        "change_pct": round(ratio * 100, 4) if ratio is not None else None,
+                        "net": parse_number(row.get("netamount")),
+                        "net_pct": parse_number(row.get("ratioamount")),
+                        "main_net": parse_number(row.get("r0_net")),
+                    }
+                )
+            return out
+
+        return self._cached(f"flow:{symbol}:{days}", 300, produce) or []
+
+    def stock_detail(self, symbol: str) -> dict:
+        """单只股票的详情：行情 + 五档 + 分时 + 日线 + 资金流向。
+
+        **只在用户点开某只股票时才调用。** 这就是"按需抓取"的关键：
+        全市场 5500 只不可能每只都预先抓一份 K 线（那是 5500 个请求），
+        但单只股票只有 4 个请求、半秒左右就能回来，点击时再抓完全来得及。
+
+        四个请求并发发出，其中一个（行情）的返回里本来就带着五档盘口。
+        """
+        pool = self._pool
+        quote_future = pool.submit(self.raw_quote_fields, symbol)
+        daily_future = pool.submit(self.kline, symbol, scale=240, days=120, ttl=600)
+        intraday_future = pool.submit(self.kline, symbol, scale=5, days=96, ttl=60)
+        flow_future = pool.submit(self.moneyflow, symbol, 5)
+
+        fields, orderbook = quote_future.result()
+        quote = self._build_quote(symbol, fields) if fields else None
+
+        def settle(future) -> list:
+            try:
+                return future.result()
+            except Exception as error:  # noqa: BLE001
+                LOGGER.warning("详情分片抓取失败：%s", error)
+                return []
+
+        return {
+            "code": quote.code if quote else short_code(symbol),
+            "sina": symbol,
+            "quote": quote.to_dict() if quote else None,
+            "orderbook": orderbook,
+            "daily": settle(daily_future),
+            "intraday": settle(intraday_future),
+            "moneyflow": settle(flow_future),
+        }
+
+    def raw_quote_fields(self, symbol: str) -> tuple[list[str], dict]:
+        """单只标的的原始字段 + 五档盘口。
+
+        和 ``quotes()`` 走同一个接口，区别是这里保留原始字段，
+        因为五档盘口只存在于原始字段里。
+        """
+        raw = self._request(HOST_QUOTE, "/list=" + symbol)
+        if not raw:
+            return [], {"bids": [], "asks": []}
+        fields = parse_sina_quotes(decode_gbk(raw)).get(symbol.lower(), [])
+        return fields, orderbook_fields(fields)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import mimetypes
+import re
 import threading
 import time
 import urllib.parse
@@ -25,7 +26,7 @@ from pathlib import Path
 
 from ashare_watch.collector import Collector
 from ashare_watch.config import Settings, get_settings
-from ashare_watch.models import Snapshot
+from ashare_watch.models import Snapshot, snapshot_from_dict
 from ashare_watch.render import export_snapshot
 from ashare_watch.store import SnapshotStore
 from ashare_watch.structure import to_sina_symbol
@@ -34,6 +35,10 @@ LOGGER = logging.getLogger("ashare_watch.server")
 
 STATIC_DIR = Path(__file__).parent / "static"
 POLL_HINT_SECONDS = 10
+
+# 详情接口只接受 6 位代码（可带 sh/sz/bj 前缀）。这个代码会被拼进请求路径，
+# 所以必须在入口处卡死格式，不能让它变成"随便构造 URL"的跳板。
+STOCK_CODE = re.compile(r"(sh|sz|bj)?\d{6}")
 
 
 class DashboardState:
@@ -91,6 +96,8 @@ class RefreshWorker(threading.Thread):
         self.state = state
         self._wake = threading.Event()
         self._stop = threading.Event()
+        # 被上游限流之后的冷却截止时间（time.monotonic 口径）
+        self._cooldown_until = 0.0
 
     def trigger(self) -> None:
         self._wake.set()
@@ -105,7 +112,10 @@ class RefreshWorker(threading.Thread):
         self._refresh(include_universe=False)
         self._refresh(include_universe=True)
         while not self._stop.is_set():
-            self._wake.wait(timeout=self.state.interval)
+            wait = float(self.state.interval)
+            if self._cooldown_until > time.monotonic():
+                wait = max(wait, self._cooldown_until - time.monotonic())
+            self._wake.wait(timeout=wait)
             self._wake.clear()
             if self._stop.is_set():
                 break
@@ -117,9 +127,21 @@ class RefreshWorker(threading.Thread):
         if self.state.refreshing:
             return
         self.state.refreshing = True
+        limited_before = self.collector.client.stats.get("rate_limited", 0)
         try:
             snapshot = self.collector.refresh(include_universe=include_universe)
             self.state.set_snapshot(snapshot)
+            # 被限流之后不要继续按 15 秒的节奏去敲门：限流窗口是按请求量续期的，
+            # 越是硬敲，恢复得越慢，页面上也会长时间只剩残缺数据。
+            # 这里退到冷却时间再来，用一个请求换回正常的刷新节奏。
+            if self.collector.client.stats.get("rate_limited", 0) > limited_before:
+                self._cooldown_until = time.monotonic() + self.collector.settings.rate_limit_cooldown
+                LOGGER.warning(
+                    "被上游限流，暂停刷新 %.0f 秒后再试",
+                    self.collector.settings.rate_limit_cooldown,
+                )
+            else:
+                self._cooldown_until = 0.0
             LOGGER.info(
                 "刷新完成（第 %d 次，%s）：%s  耗时 %.1fs",
                 self.state.refresh_count,
@@ -213,6 +235,17 @@ class Handler(BaseHTTPRequestHandler):
             quotes = self.collector.client.quotes(symbols)
             self._send_json({"quotes": [q.to_dict() for q in quotes]})
             return
+        if path == "/api/stock":
+            # 单只股票的详情，供「点进某只股票」用。
+            # 全市场 5500 只不可能每只都预先抓一份 K 线（那是 5500 个请求），
+            # 但单只股票只要 4 个请求、半秒左右，点开时再抓完全来得及。
+            query = urllib.parse.urlparse(self.path).query
+            code = urllib.parse.parse_qs(query).get("code", [""])[0].strip().lower()
+            if not STOCK_CODE.fullmatch(code):
+                self._send_json({"error": "代码格式不对，应该是 6 位数字"}, 400)
+                return
+            self._send_json(self.collector.stock_detail(to_sina_symbol(code)))
+            return
         if path == "/api/health":
             self._send_json(
                 {
@@ -275,10 +308,9 @@ def create_server(
     # 先用上次的快照把页面撑起来，避免首屏空白
     cached = store.latest_snapshot()
     if cached:
-        fields = {k: v for k, v in cached.items() if k in Snapshot.__dataclass_fields__}
         try:
-            state.snapshot = Snapshot(**fields)
-        except TypeError:
+            state.snapshot = snapshot_from_dict(cached)
+        except (TypeError, ValueError):
             LOGGER.warning("缓存快照结构不兼容，已忽略")
 
     worker = RefreshWorker(collector, state)

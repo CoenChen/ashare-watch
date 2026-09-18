@@ -16,7 +16,7 @@ from ashare_watch.derive import (
     build_search_index,
 )
 from ashare_watch.market import beijing_now, market_status
-from ashare_watch.models import Snapshot
+from ashare_watch.models import Snapshot, snapshot_from_dict
 from ashare_watch.store import SnapshotStore
 from ashare_watch.structure import to_sina_symbol
 
@@ -26,6 +26,13 @@ SOURCES = [
     "hq.sinajs.cn（指数与个股行情）",
     "vip.stock.finance.sina.com.cn（全市场 / 行业板块）",
     "quotes.sina.cn（指数日线）",
+]
+
+# 详情接口比快照多出来的一路数据源，写在这里方便前端/README 引用
+DETAIL_SOURCES = [
+    "hq.sinajs.cn（实时行情 + 买卖五档）",
+    "quotes.sina.cn（日线与 5 分钟线）",
+    "vip.stock.finance.sina.com.cn（资金流向）",
 ]
 
 
@@ -187,6 +194,18 @@ class Collector:
         )
         return snapshot
 
+    def stock_detail(self, symbol: str) -> dict:
+        """单只股票的详情。**只在用户点开某只股票时调用，不进快照。**
+
+        为什么不预先抓：全市场 5500 多只，每只一份 K 线就是 5500 多个请求，
+        既慢又会把接口撞进限流。而单只股票只有 4 个请求、半秒左右，
+        用户点开的瞬间去抓完全来得及——这就是「按需抓取」的取舍。
+        """
+        detail = self.client.stock_detail(symbol)
+        detail["fetched_at"] = _now()
+        detail["sources"] = DETAIL_SOURCES
+        return detail
+
     def search_index(self) -> list[list]:
         """搜索用的精简全市场索引。
 
@@ -233,9 +252,8 @@ class Collector:
     def cached_or_refresh(self) -> Snapshot:
         cached = self.store.latest_snapshot()
         if cached:
-            fields = {k: v for k, v in cached.items() if k in Snapshot.__dataclass_fields__}
             try:
-                return Snapshot(**fields)
-            except TypeError:
+                return snapshot_from_dict(cached)
+            except (TypeError, ValueError):
                 LOGGER.warning("缓存快照结构不兼容，改为重新抓取")
         return self.refresh()

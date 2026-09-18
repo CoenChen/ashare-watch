@@ -111,13 +111,27 @@ def build_search_index(universe: list[Quote]) -> list[list]:
     两个设计选择，都是为了控制体积：
 
     1. **用数组而不是对象**。5500 多只股票如果用 ``{"code":...,"name":...}``
-       这种带字段名的写法要 500KB 以上，用固定顺序的数组只要 200 多 KB。
-       字段顺序：``[代码, 名称, 现价, 涨跌幅, 换手率, 成交额(万元)]``。
+      这种带字段名的写法要 500KB 以上，用固定顺序的数组只要 200 多 KB。
+       字段顺序：
+       ``[代码, 名称, 现价, 涨跌幅, 换手率, 成交额(万元), 市盈率, 市净率,
+       总市值(亿元), 流通市值(亿元)]``。
     2. **按成交额降序**。搜索「银行」这类词会命中几十只，把流动性好的排在
        前面更符合直觉；这也让前端不必再排序。
 
     索引只在浏览器本地过滤，不发任何请求——5500 条数组匹配是微秒级的。
+
+    后面四个基本面字段是给「点进某只股票」用的：全市场都带着市盈率、市净率、
+    市值，与其点开时再为这一只单独查一次，不如顺手放进已经要传的索引里。
+    代价是索引大了几十 KB，换来的是详情面板的基本面能秒出、静态分享页上也有。
     """
+    def yi(value: float | None) -> float | None:
+        """元 → 亿元，取整。
+
+        市值动辄上千亿，用元存要十位数字；而"亿元保留两位小数"是没有意义的
+        精度（一天之内本来就变动很大），取整既够看又省下几十 KB 的体积。
+        """
+        return int(round(value / 1e8)) if value else None
+
     rows: list[list] = []
     for quote in universe:
         if not quote.code or not quote.name:
@@ -130,6 +144,10 @@ def build_search_index(universe: list[Quote]) -> list[list]:
                 round(quote.change_pct, 2) if quote.change_pct is not None else None,
                 round(quote.turnover, 2) if quote.turnover is not None else None,
                 int((quote.amount or 0) / 10_000),  # 元 → 万元，省一半字符
+                round(quote.pe, 2) if quote.pe is not None else None,
+                round(quote.pb, 2) if quote.pb is not None else None,
+                yi(quote.market_cap),
+                yi(quote.float_cap),
             ]
         )
     rows.sort(key=lambda row: row[5], reverse=True)

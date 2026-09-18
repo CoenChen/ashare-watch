@@ -28,9 +28,29 @@ def make(code: str, name: str, price: float, pct: float, turnover: float, amount
 def test_search_index_field_order_and_units():
     """字段顺序是前端按数组下标取的，改顺序等于改契约。"""
     rows = build_search_index([make("600519", "贵州茅台", 1258.0, -1.16, 0.14, 2_258_702_422)])
-    assert rows == [["600519", "贵州茅台", 1258.0, -1.16, 0.14, 225870]]
+    assert rows == [["600519", "贵州茅台", 1258.0, -1.16, 0.14, 225870, None, None, None, None]]
     # 成交额单位是万元：225870 万元 = 22.587 亿
     assert rows[0][5] == 225870
+
+
+def test_search_index_carries_fundamentals_for_the_detail_panel():
+    """市盈率、市净率、市值跟着索引一起传。
+
+    这几个字段是「点开某只股票」时要用的。全市场本来就带着它们，
+    顺手放进索引，比点开时再为这一只单独查一次划算——静态分享页上也能看到。
+    注意市值单位是**亿元**，不是元。
+    """
+    quote = make("600519", "贵州茅台", 1258.0, -1.16, 0.14, 2_258_702_422)
+    quote.pe = 22.53
+    quote.pb = 7.81
+    quote.market_cap = 1_580_000_000_000      # 1.58 万亿
+    quote.float_cap = 1_580_000_000_000
+
+    row = build_search_index([quote])[0]
+    assert row[6] == 22.53
+    assert row[7] == 7.81
+    assert row[8] == 15800                    # 元 → 亿元，取整
+    assert row[9] == 15800
 
 
 def test_search_index_sorted_by_amount_desc():

@@ -64,63 +64,52 @@
     <div id="search-results" class="search-results" hidden></div>
   </section>
 
-  <!-- 我的关注：手动加的，存在浏览器本地（所以静态分享页也能用） -->
-  <section class="panel" id="follow-panel">
-    <div class="panel-head">
-      <h3>我的关注 <span class="sub">搜索后点 ☆ 加入，只存在你自己浏览器里</span></h3>
-      <div class="follow-actions">
-        <span class="chip" id="follow-count">—</span>
-        <button id="follow-clear" class="ghost-btn" hidden>全部清空</button>
-      </div>
+  <!-- 主导航：把原来的长页面横向切成几屏，手机上不用一路往下拉。
+       吸顶 + 可横向滚动，标签数量再多也不会挤爆。 -->
+  <nav class="tabs main-tabs" id="main-tabs" role="tablist">
+    <button class="tab active" type="button" role="tab" data-panel="overview">概览</button>
+    <button class="tab" type="button" role="tab" data-panel="mine">
+      自选 · 关注<span class="tab-badge" id="tab-badge-mine" hidden>0</span>
+    </button>
+    <button class="tab" type="button" role="tab" data-panel="macro">环球市场</button>
+    <button class="tab" type="button" role="tab" data-panel="sectors">行业板块</button>
+    <button class="tab" type="button" role="tab" data-panel="rank">榜单</button>
+  </nav>
+
+  <!-- ------------------------------- 概览 ------------------------------- -->
+  <section class="tab-panel is-active" data-panel="overview">
+    <!-- 指数主卡 -->
+    <section id="index-cards" class="index-row"></section>
+
+    <!-- 市场宽度 + 涨跌停统计（A 股最有信息量的两个情绪指标） -->
+    <div class="grid-2">
+      <section class="panel">
+        <div class="panel-head">
+          <h3>市场宽度 <span class="sub">全市场涨跌家数</span></h3>
+          <span class="chip" id="breadth-total">—</span>
+        </div>
+        <div class="breadth-bar" id="breadth-bar"></div>
+        <div class="breadth-legend">
+          <span class="up"><i></i>上涨 <b id="breadth-up">—</b></span>
+          <span class="flat"><i></i>平盘 <b id="breadth-flat">—</b></span>
+          <span class="down"><i></i>下跌 <b id="breadth-down">—</b></span>
+        </div>
+        <div class="mini-stats" id="mini-stats"></div>
+      </section>
+
+      <section class="panel">
+        <div class="panel-head">
+          <h3>涨跌停统计 <span class="sub">A 股短线情绪的核心指标</span></h3>
+          <span class="chip ghost" id="limit-sample">—</span>
+        </div>
+        <div id="limit-grid" class="limit-grid"></div>
+        <p class="limit-note">
+          涨停家数反映资金进攻意愿，跌停家数反映恐慌程度；一字涨停说明有资金抢筹，
+          炸板说明封板不牢。主板 ±10%、创业板与科创板 ±20%、北交所 ±30%。
+        </p>
+      </section>
     </div>
-    <div id="follow-list" class="watch-grid"></div>
-  </section>
 
-  <!-- 指数主卡 -->
-  <section id="index-cards" class="index-row"></section>
-
-  <!-- 市场宽度 + 涨跌停统计（A 股最有信息量的两个情绪指标） -->
-  <div class="grid-2">
-    <section class="panel">
-      <div class="panel-head">
-        <h3>市场宽度 <span class="sub">全市场涨跌家数</span></h3>
-        <span class="chip" id="breadth-total">—</span>
-      </div>
-      <div class="breadth-bar" id="breadth-bar"></div>
-      <div class="breadth-legend">
-        <span class="up"><i></i>上涨 <b id="breadth-up">—</b></span>
-        <span class="flat"><i></i>平盘 <b id="breadth-flat">—</b></span>
-        <span class="down"><i></i>下跌 <b id="breadth-down">—</b></span>
-      </div>
-      <div class="mini-stats" id="mini-stats"></div>
-    </section>
-
-    <section class="panel">
-      <div class="panel-head">
-        <h3>涨跌停统计 <span class="sub">A 股短线情绪的核心指标</span></h3>
-        <span class="chip ghost" id="limit-sample">—</span>
-      </div>
-      <div id="limit-grid" class="limit-grid"></div>
-      <p class="limit-note">
-        涨停家数反映资金进攻意愿，跌停家数反映恐慌程度；一字涨停说明有资金抢筹，
-        炸板说明封板不牢。主板 ±10%、创业板与科创板 ±20%、北交所 ±30%。
-      </p>
-    </section>
-  </div>
-
-  <!-- 环球市场：分组可收起，品种多的时候不至于把页面占满 -->
-  <section class="panel">
-    <div class="panel-head">
-      <h3>环球市场 <span class="sub">影响 A 股的外部变量</span></h3>
-      <div class="macro-actions">
-        <span class="chip ghost" id="macro-note">—</span>
-        <button id="macro-toggle" class="ghost-btn" type="button">全部收起</button>
-      </div>
-    </div>
-    <div id="macro-groups" class="macro-groups"></div>
-  </section>
-
-  <div class="grid-2">
     <!-- 指数走势 -->
     <section class="panel">
       <div class="panel-head">
@@ -134,8 +123,49 @@
       </div>
       <div id="history-chart" class="chart"></div>
     </section>
+  </section>
 
-    <!-- 行业板块 -->
+  <!-- ---------------------------- 自选 · 关注 ---------------------------- -->
+  <section class="tab-panel" data-panel="mine">
+    <!-- 我的关注：手动加的，存在浏览器本地（所以静态分享页也能用） -->
+    <section class="panel" id="follow-panel">
+      <div class="panel-head">
+        <h3>我的关注 <span class="sub">搜索后点 ☆ 加入，只存在你自己浏览器里</span></h3>
+        <div class="follow-actions">
+          <span class="chip" id="follow-count">—</span>
+          <button id="follow-clear" class="ghost-btn" hidden>全部清空</button>
+        </div>
+      </div>
+      <div id="follow-list" class="watch-grid"></div>
+    </section>
+
+    <!-- 自选股 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3>自选股 <span class="sub" id="watchlist-count">—</span></h3>
+        <span class="chip ghost">在 .env 里修改 ASHARE_WATCH_SYMBOLS 自定义</span>
+      </div>
+      <div id="watchlist" class="watch-grid"></div>
+    </section>
+  </section>
+
+  <!-- ---------------------------- 环球市场 ------------------------------ -->
+  <section class="tab-panel" data-panel="macro">
+    <!-- 分组可收起，品种多的时候不至于把页面占满 -->
+    <section class="panel">
+      <div class="panel-head">
+        <h3>环球市场 <span class="sub">影响 A 股的外部变量</span></h3>
+        <div class="macro-actions">
+          <span class="chip ghost" id="macro-note">—</span>
+          <button id="macro-toggle" class="ghost-btn" type="button">全部收起</button>
+        </div>
+      </div>
+      <div id="macro-groups" class="macro-groups"></div>
+    </section>
+  </section>
+
+  <!-- ---------------------------- 行业板块 ------------------------------ -->
+  <section class="tab-panel" data-panel="sectors">
     <section class="panel">
       <div class="panel-head">
         <h3>行业板块 <span class="sub">官方行业分类涨跌幅</span></h3>
@@ -143,44 +173,37 @@
       </div>
       <div id="sector-list" class="sector-list"></div>
     </section>
-  </div>
-
-  <!-- 自选股 -->
-  <section class="panel">
-    <div class="panel-head">
-      <h3>自选股 <span class="sub" id="watchlist-count">—</span></h3>
-      <span class="chip ghost">在 .env 里修改 ASHARE_WATCH_SYMBOLS 自定义</span>
-    </div>
-    <div id="watchlist" class="watch-grid"></div>
   </section>
 
-  <!-- 榜单 -->
-  <section class="panel">
-    <div class="panel-head">
-      <h3>市场榜单</h3>
-      <nav class="tabs" id="rank-tabs">
-        <button class="tab active" data-key="gainers">涨幅榜</button>
-        <button class="tab" data-key="losers">跌幅榜</button>
-        <button class="tab" data-key="most_active">成交额榜</button>
-        <button class="tab" data-key="turnover_leaders">换手率榜</button>
-      </nav>
-    </div>
-    <div class="table-wrap">
-      <table class="rank-table">
-        <thead>
-          <tr>
-            <th class="col-idx">#</th>
-            <th>代码 / 名称</th>
-            <th class="num">最新价</th>
-            <th class="num">涨跌额</th>
-            <th class="num">涨跌幅</th>
-            <th class="num">成交额</th>
-            <th class="num">换手率</th>
-          </tr>
-        </thead>
-        <tbody id="rank-body"></tbody>
-      </table>
-    </div>
+  <!-- ------------------------------- 榜单 ------------------------------- -->
+  <section class="tab-panel" data-panel="rank">
+    <section class="panel">
+      <div class="panel-head">
+        <h3>市场榜单</h3>
+        <nav class="tabs" id="rank-tabs">
+          <button class="tab active" data-key="gainers">涨幅榜</button>
+          <button class="tab" data-key="losers">跌幅榜</button>
+          <button class="tab" data-key="most_active">成交额榜</button>
+          <button class="tab" data-key="turnover_leaders">换手率榜</button>
+        </nav>
+      </div>
+      <div class="table-wrap">
+        <table class="rank-table">
+          <thead>
+            <tr>
+              <th class="col-idx">#</th>
+              <th>代码 / 名称</th>
+              <th class="num">最新价</th>
+              <th class="num">涨跌额</th>
+              <th class="num">涨跌幅</th>
+              <th class="num">成交额</th>
+              <th class="num">换手率</th>
+            </tr>
+          </thead>
+          <tbody id="rank-body"></tbody>
+        </table>
+      </div>
+    </section>
   </section>
 
   <footer class="foot">
@@ -188,6 +211,33 @@
     <span id="foot-meta"></span>
   </footer>
 </main>
+
+<!-- 个股详情：点开某只股票时才去抓，全市场不预先抓 -->
+<div id="detail-scrim" class="scrim" hidden></div>
+<aside id="detail" class="drawer" role="dialog" aria-modal="true" aria-labelledby="detail-name" hidden>
+  <header class="drawer-head">
+    <div class="dh-left">
+      <div class="dh-title">
+        <h3 id="detail-name">—</h3>
+        <span class="dh-code" id="detail-code">—</span>
+        <span id="detail-tags"></span>
+      </div>
+      <div class="dh-price">
+        <strong id="detail-price">—</strong>
+        <span id="detail-change">—</span>
+      </div>
+    </div>
+    <div class="dh-actions">
+      <button id="detail-follow" class="ghost-btn" type="button">☆ 关注</button>
+      <button id="detail-close" class="icon-btn" type="button" aria-label="关闭">×</button>
+    </div>
+  </header>
+  <div class="drawer-body" id="detail-body"></div>
+  <footer class="drawer-foot" id="detail-foot"></footer>
+</aside>
+
+<!-- 轻量提示：加入关注后给一个即时反馈，因为关注面板可能在另一个标签页里 -->
+<div id="toast" class="toast" hidden></div>
 
 <script src="/static/app.js"></script>
 </body>

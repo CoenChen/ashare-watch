@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from ashare_watch.config import Settings
+from ashare_watch.models import snapshot_from_dict
 from ashare_watch.render import build_standalone_html, export_snapshot
 from ashare_watch.store import SnapshotStore
 
@@ -39,6 +40,26 @@ def test_snapshot_roundtrip(tmp_path):
     assert latest["limits"]["涨停家数"] == 40
 
 
+def test_snapshot_from_dict_rebuilds_nested_objects(tmp_path):
+    """从 SQLite 读回来的快照要能转回对象。
+
+    这里踩过一次：直接 ``Snapshot(**data)`` 时 ``market`` 还是普通 dict，
+    于是 ``snapshot.to_dict()``（内部是 ``self.market.to_dict()``）和刷新调度里的
+    ``snapshot.market.is_open`` 都会抛 AttributeError——表现是服务刚启动的
+    那几秒接口 500，等第一次抓取回来又自己好了，非常难查。
+    """
+    store = SnapshotStore(tmp_path / "m.sqlite3")
+    store.save_snapshot(sample_snapshot())
+    restored = snapshot_from_dict(store.latest_snapshot())
+
+    assert restored.market.is_open is True
+    assert restored.market.session == "下午盘"
+    # 关键：转回去还要能再序列化一次，且内容一致
+    again = restored.to_dict()
+    assert again["market"]["status"] == "交易中"
+    assert again["indexes"][0]["name"] == "上证指数"
+
+
 def test_latest_returns_most_recent(tmp_path):
     store = SnapshotStore(tmp_path / "m.sqlite3")
     store.save_snapshot(sample_snapshot("2026-09-16T10:00:00+08:00"))
@@ -70,6 +91,21 @@ def test_latest_complete_snapshot_returns_none_when_everything_is_hollow(tmp_pat
     hollow["coverage"] = {"universe": 0}
     store.save_snapshot(hollow)
     assert store.latest_complete_snapshot() is None
+
+
+def test_latest_complete_snapshot_can_require_freshness(tmp_path):
+    """``max_age_seconds`` 用来判断"本地这份还算新吗"。
+
+    导出时先看它一眼：本地看板刚抓过就不要再翻 56 页，免得和看板一起被限流。
+    刚写进去的快照应该算新，要求 0 秒则应该算旧。
+    """
+    store = SnapshotStore(tmp_path / "m.sqlite3")
+    good = sample_snapshot()
+    good["coverage"] = {"universe": 5564}
+    store.save_snapshot(good)
+
+    assert store.latest_complete_snapshot(max_age_seconds=300) is not None
+    assert store.latest_complete_snapshot(max_age_seconds=0) is None
 
 
 def test_collection_log_records_failures(tmp_path):

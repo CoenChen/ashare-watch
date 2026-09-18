@@ -176,33 +176,58 @@ function renderLimits(snapshot) {
 }
 
 /* ------------------------------------------------------------- 走势图 */
-function renderHistory() {
-  const host = $("history-chart");
-  const rows = (state.snapshot?.index_history || []).slice(-state.chartDays);
-  if (rows.length < 2) {
-    host.innerHTML = '<div style="color:var(--muted);padding:20px">暂无历史数据。</div>';
+/**
+ * 画一条折线：网格 + 面积 + 悬停十字线。
+ *
+ * 指数的日线、个股的日线、个股的分时用的是同一套画法，所以做成一个函数，
+ * 参数里换「取哪个值、横轴写什么」就够了：
+ *   host      容器元素
+ *   rows      数据行
+ *   value     从一行里取出要画的数值
+ *   label     从一行里取出横轴标签
+ *   baseline  可选的基准线（分时图用昨收），同时决定红绿
+ *
+ * 参数名刻意不叫 valueOf / toString：那样会撞上 Object.prototype 上现成的
+ * 方法，`opts.valueOf` 永远是真值，一调用就抛
+ * "Cannot convert undefined or null to object"。这个坑踩过一次。
+ */
+let chartSeq = 0;
+
+function drawLineChart(host, rows, opts = {}) {
+  const valueOf = typeof opts.value === "function" ? opts.value : ((r) => r.close);
+  const labelOf = typeof opts.label === "function" ? opts.label : ((r) => r.date || "");
+  const fallbackHeight = opts.height || 260;
+  const points = (rows || []).filter(
+    (r) => valueOf(r) !== null && valueOf(r) !== undefined
+  );
+  if (points.length < 2) {
+    host.innerHTML = `<div style="color:var(--muted);padding:20px">${esc(opts.empty || "暂无数据。")}</div>`;
     return;
   }
 
   const W = Math.max(host.clientWidth || 720, 320);
-  const H = host.clientHeight || 260;
-  const padL = 58, padR = 16, padT = 16, padB = 28;
+  const H = host.clientHeight || fallbackHeight;
+  const padL = opts.padLeft ?? 58, padR = 16, padT = 16, padB = 28;
   const innerW = W - padL - padR, innerH = H - padT - padB;
 
-  const closes = rows.map((r) => r.close);
+  const closes = points.map(valueOf);
   const lo = Math.min(...closes), hi = Math.max(...closes);
   const pad = (hi - lo || 1) * 0.08;
   const yMin = lo - pad, yMax = hi + pad;
-  const x = (i) => padL + (innerW * i) / (rows.length - 1);
+  const x = (i) => padL + (innerW * i) / (points.length - 1);
   const y = (v) => padT + innerH - ((v - yMin) / (yMax - yMin)) * innerH;
 
-  const rising = closes[closes.length - 1] >= closes[0];
+  const hasBaseline = opts.baseline !== undefined && opts.baseline !== null;
+  const rising = hasBaseline ? closes[closes.length - 1] >= opts.baseline : closes[closes.length - 1] >= closes[0];
   const stroke = rising ? "var(--up)" : "var(--down)";
+  const rgb = rising ? "#ef4444" : "#22c55e";
+  const gradId = `chartGrad${++chartSeq}`;
+  const tickDigits = opts.digits ?? (yMax < 100 ? 2 : 0);
 
   const grid = Array.from({ length: 5 }, (_, i) => {
     const value = yMin + ((yMax - yMin) * i) / 4;
     return `<line class="grid-line" x1="${padL}" y1="${y(value).toFixed(1)}" x2="${W - padR}" y2="${y(value).toFixed(1)}"/>
-      <text class="axis-label" x="${padL - 8}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${num(value, 0)}</text>`;
+      <text class="axis-label" x="${padL - 8}" y="${(y(value) + 4).toFixed(1)}" text-anchor="end">${num(value, tickDigits)}</text>`;
   }).join("");
 
   const line = closes.map((v, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
@@ -210,28 +235,35 @@ function renderHistory() {
     padT + innerH
   ).toFixed(1)} Z`;
 
-  const step = Math.max(1, Math.floor(rows.length / 6));
-  const xLabels = rows
+  const step = Math.max(1, Math.floor(points.length / 6));
+  const xLabels = points
     .map((r, i) =>
-      i % step === 0 || i === rows.length - 1
+      i % step === 0 || i === points.length - 1
         ? `<text class="axis-label" x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle">${esc(
-            (r.date || "").slice(5)
+            labelOf(r)
           )}</text>`
         : ""
     )
     .join("");
 
+  const baselineLine = hasBaseline
+    ? `<line x1="${padL}" y1="${y(opts.baseline).toFixed(1)}" x2="${W - padR}"
+             y2="${y(opts.baseline).toFixed(1)}" stroke="rgba(236,233,245,.34)"
+             stroke-width="1" stroke-dasharray="4 4"/>`
+    : "";
+
   host.innerHTML = `<svg viewBox="0 0 ${W} ${H}" width="${W}" height="${H}">
     <defs>
-      <linearGradient id="histGrad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="${rising ? "#ef4444" : "#22c55e"}" stop-opacity="0.26"/>
-        <stop offset="100%" stop-color="${rising ? "#ef4444" : "#22c55e"}" stop-opacity="0"/>
+      <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${rgb}" stop-opacity="0.26"/>
+        <stop offset="100%" stop-color="${rgb}" stop-opacity="0"/>
       </linearGradient>
     </defs>
     ${grid}
-    <path d="${area}" fill="url(#histGrad)"/>
+    ${baselineLine}
+    <path d="${area}" fill="url(#${gradId})"/>
     <path d="${line}" fill="none" stroke="${stroke}" stroke-width="2" stroke-linejoin="round"/>
-    <g id="hist-hover" style="display:none">
+    <g class="hover" style="display:none">
       <line class="crosshair" y1="${padT}" y2="${padT + innerH}"/>
       <circle class="marker" r="4.5" stroke="${stroke}"/>
       <text class="tip-line" text-anchor="middle"></text>
@@ -241,7 +273,7 @@ function renderHistory() {
   </svg>`;
 
   const svg = host.querySelector("svg");
-  const hover = svg.querySelector("#hist-hover");
+  const hover = svg.querySelector(".hover");
   const crosshair = hover.querySelector("line");
   const marker = hover.querySelector("circle");
   const tip = hover.querySelector("text");
@@ -249,18 +281,27 @@ function renderHistory() {
   svg.querySelector(".hit").addEventListener("mousemove", (event) => {
     const rect = svg.getBoundingClientRect();
     const px = (event.clientX - rect.left) * (W / rect.width);
-    const index = Math.max(0, Math.min(rows.length - 1, Math.round(((px - padL) / innerW) * (rows.length - 1))));
-    const row = rows[index];
+    const index = Math.max(0, Math.min(points.length - 1, Math.round(((px - padL) / innerW) * (points.length - 1))));
+    const row = points[index];
+    const value = valueOf(row);
     hover.style.display = "";
     crosshair.setAttribute("x1", x(index));
     crosshair.setAttribute("x2", x(index));
     marker.setAttribute("cx", x(index));
-    marker.setAttribute("cy", y(row.close));
+    marker.setAttribute("cy", y(value));
     tip.setAttribute("x", Math.min(Math.max(x(index), padL + 44), W - padR - 44));
-    tip.setAttribute("y", Math.max(y(row.close) - 12, padT + 10));
-    tip.textContent = `${row.date}  ${num(row.close)}`;
+    tip.setAttribute("y", Math.max(y(value) - 12, padT + 10));
+    tip.textContent = `${typeof opts.tip === "function" ? opts.tip(row) : labelOf(row)}  ${num(value, tickDigits)}`;
   });
   svg.querySelector(".hit").addEventListener("mouseleave", () => { hover.style.display = "none"; });
+}
+
+function renderHistory() {
+  drawLineChart(
+    $("history-chart"),
+    (state.snapshot?.index_history || []).slice(-state.chartDays),
+    { empty: "暂无历史数据。", label: (r) => (r.date || "").slice(5) }
+  );
 }
 
 /* ------------------------------------------------------------ 行业板块 */
@@ -281,12 +322,21 @@ const MACRO_ORDER = [
 const MACRO_COLLAPSED_KEY = "ashare-watch:macro-collapsed";
 
 function loadCollapsedGroups() {
+  let raw = null;
   try {
-    const raw = localStorage.getItem(MACRO_COLLAPSED_KEY);
-    const list = raw ? JSON.parse(raw) : [];
-    return new Set(Array.isArray(list) ? list.filter((g) => typeof g === "string") : []);
+    raw = localStorage.getItem(MACRO_COLLAPSED_KEY);
   } catch (error) {
-    return new Set();
+    return { set: new Set(), saved: false };   // 无痕模式下 localStorage 不可用
+  }
+  if (raw === null) return { set: new Set(), saved: false };
+  try {
+    const list = JSON.parse(raw);
+    return {
+      set: new Set(Array.isArray(list) ? list.filter((g) => typeof g === "string") : []),
+      saved: true,
+    };
+  } catch (error) {
+    return { set: new Set(), saved: false };
   }
 }
 
@@ -296,9 +346,25 @@ function saveCollapsedGroups() {
   } catch (error) {
     /* 存不进去就只在本次会话有效 */
   }
+  macroPrefsSaved = true;
 }
 
-const collapsedGroups = loadCollapsedGroups();
+const macroPrefs = loadCollapsedGroups();
+const collapsedGroups = macroPrefs.set;
+let macroPrefsSaved = macroPrefs.saved;
+
+/** 窄屏第一次打开时默认全部收起。
+ *
+ *  56 个品种在手机上铺开有七八千像素高，一路往下拉很劝退；而 10 个分组标题
+ *  加起来还不到一屏，先收着、想看哪组再点开更合理。桌面屏幕宽，默认展开。
+ *  用户一旦手动点过，之后就以他的选择为准。
+ */
+function collapseAllOnFirstMobileVisit(groups) {
+  if (macroPrefsSaved) return;
+  if (!window.matchMedia("(max-width: 760px)").matches) return;
+  groups.forEach((name) => collapsedGroups.add(name));
+  saveCollapsedGroups();
+}
 
 function toggleMacroGroup(groupEl) {
   const collapsed = groupEl.classList.toggle("collapsed");
@@ -361,6 +427,8 @@ function renderMacro(macro) {
   });
   const order = [...MACRO_ORDER.filter((k) => grouped.has(k)),
                  ...[...grouped.keys()].filter((k) => !MACRO_ORDER.includes(k))];
+
+  collapseAllOnFirstMobileVisit(order);
 
   host.innerHTML = order
     .map((group) => {
@@ -449,7 +517,7 @@ function renderWatchlist(watchlist) {
   $("watchlist").innerHTML = watchlist
     .map((q) => {
       const d = q.direction;
-      return `<div class="watch-card ${d}">
+      return `<div class="watch-card ${d}" data-code="${esc(q.code)}">
         <div class="top">
           <span class="sym">${esc(q.code)}</span>
           <span class="pct ${dirClass(d)}">${pct(q.change_pct)}</span>
@@ -469,7 +537,7 @@ function renderRank() {
   $("rank-body").innerHTML = rows
     .map((q, i) => {
       const d = q.direction;
-      return `<tr>
+      return `<tr data-code="${esc(q.code)}">
         <td class="idx">${i + 1}</td>
         <td><div class="sym">${esc(q.code)}${stTag(q)}${limitTag(q)}</div>
             <div class="nm" title="${esc(q.name)}">${esc(q.name)} · ${esc(q.board || "")}</div></td>
@@ -588,7 +656,7 @@ function renderSearchResults(rows, query) {
       const turn =
         turnover === null || turnover === undefined ? "—" : turnover.toFixed(2) + "%";
       const on = isFollowed(code);
-      return `<div class="search-row">
+      return `<div class="search-row" data-code="${esc(code)}">
         <span class="sr-code ${dirClass(d)}">${esc(code)}</span>
         <span class="sr-name">${esc(name)}<em>${boardName(code)}</em></span>
         <span class="sr-price ${dirClass(d)}">${num(price)}</span>
@@ -630,6 +698,10 @@ async function loadSearchIndex() {
   }
 }
 
+// 点搜索结果打开详情时，要让下拉立刻收起；但同一个点击还会冒泡到 document
+// 上「点搜索框就展开下拉」的逻辑，会把刚收起的下拉又展开。用一个短标志挡一下。
+let searchJumping = false;
+
 function bindSearch() {
   $("search-input").addEventListener("input", onSearchInput);
   $("search-input").addEventListener("keydown", (event) => {
@@ -650,6 +722,14 @@ function bindSearch() {
     if (btn) {
       event.stopPropagation();
       toggleFollow(btn.dataset.code);
+      return;
+    }
+    // 点结果本身 = 看这只股票的详情
+    const row = event.target.closest(".search-row");
+    if (row) {
+      searchJumping = true;
+      $("search-results").hidden = true;
+      openDetail(row.dataset.code);
     }
   });
   $("follow-clear").addEventListener("click", () => {
@@ -670,9 +750,10 @@ function bindSearch() {
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".search-block")) {
       $("search-results").hidden = true;
-    } else if ($("search-input").value.trim()) {
+    } else if (!searchJumping && $("search-input").value.trim()) {
       $("search-results").hidden = false;
     }
+    searchJumping = false;
   });
 }
 
@@ -778,6 +859,9 @@ function toggleFollow(code) {
   renderFollow();
   refreshFollowQuotes();
   renderSearchResults(searchStocks($("search-input").value), $("search-input").value);
+  // 关注面板现在在另一个标签页里，不给点反馈的话会怀疑自己没点到
+  const name = (quoteFor(code) || {}).name || code;
+  showToast(isFollowed(code) ? `已加入关注 · ${name}` : `已移出关注 · ${name}`);
 }
 
 function flashFollowHint(text) {
@@ -797,6 +881,7 @@ function renderFollow() {
   const clear = $("follow-clear");
   count.textContent = followed.length ? `${followed.length} 只` : "—";
   clear.hidden = followed.length === 0;
+  syncTabBadge();
 
   if (!followed.length) {
     host.innerHTML = `<div class="follow-empty">
@@ -813,7 +898,7 @@ function renderFollow() {
       if (!q) {
         // 手上一条数据都没有（新加的、又还没拉到行情）：不要摆一排「—」，
         // 那看起来像接口挂了。给一个明确的等待态。
-        return `<div class="watch-card pending">
+        return `<div class="watch-card pending" data-code="${esc(code)}">
           <button class="remove-btn" data-code="${esc(code)}" title="移除关注">×</button>
           <div class="top"><span class="sym">${esc(code)}</span></div>
           <div class="nm">正在取行情…</div>
@@ -831,7 +916,7 @@ function renderFollow() {
       const vol = q.amount
         ? `<div class="vol">额 ${money(q.amount)}${q.turnover != null ? ` · 换手 ${q.turnover.toFixed(2)}%` : ""}</div>`
         : "";
-      return `<div class="watch-card ${d}">
+      return `<div class="watch-card ${d}" data-code="${esc(code)}">
         <button class="remove-btn" data-code="${esc(code)}" title="移除关注">×</button>
         <div class="top">
           <span class="sym">${esc(code)}</span>
@@ -854,10 +939,14 @@ function quoteFor(code) {
   return followQuotes.get(code) || rowToQuote(searchRowsByCode.get(code)) || null;
 }
 
-/** 把搜索索引的一行（数组）转成和行情一样的扁平结构。 */
+/**
+ * 把搜索索引的一行（数组）转成和行情一样的扁平结构。
+ * 字段顺序见 `derive.build_search_index`：代码、名称、现价、涨跌幅、换手率、
+ * 成交额(万元)、市盈率、市净率、总市值(亿元)、流通市值(亿元)。
+ */
 function rowToQuote(row) {
   if (!row) return null;
-  const [code, name, price, changePct, turnover, amountWan] = row;
+  const [code, name, price, changePct, turnover, amountWan, pe, pb, capYi, floatYi] = row;
   return {
     code,
     name,
@@ -865,6 +954,10 @@ function rowToQuote(row) {
     change_pct: changePct,
     turnover,
     amount: (amountWan || 0) * 10000,
+    pe,
+    pb,
+    market_cap: capYi ? capYi * 1e8 : null,
+    float_cap: floatYi ? floatYi * 1e8 : null,
     direction: changePct === null || changePct === undefined
       ? "flat"
       : changePct > 0.0001 ? "up" : changePct < -0.0001 ? "down" : "flat",
@@ -914,6 +1007,331 @@ async function refreshFollowQuotes() {
 
 /* --------------------------------------------------------------- 拉取 */
 let loadingElapsed = 0;
+
+/* ------------------------------------------------------------ 主导航
+ *
+ *  原来是「一页到底」，手机上要拉很久才看得到榜单。现在横着切成几屏：
+ *  概览 / 自选·关注 / 环球市场 / 行业板块 / 榜单。
+ *  选中的标签记在浏览器里，刷新之后还停在原来那一屏。
+ */
+const TAB_KEY = "ashare-watch:tab";
+const TAB_NAMES = ["overview", "mine", "macro", "sectors", "rank"];
+
+function savedTab() {
+  try {
+    const name = localStorage.getItem(TAB_KEY);
+    return TAB_NAMES.includes(name) ? name : "overview";
+  } catch (error) {
+    return "overview";  // 无痕模式下 localStorage 可能不可用
+  }
+}
+
+function showTab(name) {
+  if (!TAB_NAMES.includes(name)) name = "overview";
+  document.querySelectorAll("#main-tabs .tab").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.panel === name);
+  });
+  document.querySelectorAll(".tab-panel").forEach((panel) => {
+    panel.classList.toggle("is-active", panel.dataset.panel === name);
+  });
+  try {
+    localStorage.setItem(TAB_KEY, name);
+  } catch (error) {
+    /* 存不进去就只在本次会话有效 */
+  }
+  // 面板隐藏时容器量不到宽度，切回来必须重画一次，否则图会挤成一小条
+  if (name === "overview") renderHistory();
+  syncTabBadge();
+}
+
+function bindTabs() {
+  $("main-tabs").addEventListener("click", (event) => {
+    const btn = event.target.closest(".tab");
+    if (btn) showTab(btn.dataset.panel);
+  });
+  showTab(savedTab());
+}
+
+/** 「自选 · 关注」标签上带一个关注数，点了 ☆ 之后一眼能看到有没有成功。 */
+function syncTabBadge() {
+  const badge = $("tab-badge-mine");
+  if (!badge) return;
+  badge.hidden = followed.length === 0;
+  badge.textContent = followed.length;
+}
+
+/* ---------------------------------------------------------- 个股详情
+ *
+ *  数据**点开的时候才去抓**。全市场 5500 多只不可能每只都预先抓一份 K 线，
+ *  那是 5500 个请求；而单只股票只要 4 个请求、半秒左右，点开时再抓完全来得及。
+ *
+ *  静态分享页没有后端，这里会退化成「只展示搜索索引里已有的行情和基本面」，
+ *  并且明确告诉访客分时和盘口需要在本机跑服务。
+ */
+const detailCache = new Map();   // code -> { at, data }
+let detailCode = "";
+
+function openDetail(code) {
+  if (!/^\d{6}$/.test(code)) return;
+  detailCode = code;
+  const local = rowToQuote(searchRowsByCode.get(code));
+
+  $("detail-scrim").hidden = false;
+  $("detail").hidden = false;
+  document.body.classList.add("drawer-open");
+  renderDetailHeader(code, local);
+  updateFollowButton(code);
+
+  const cached = detailCache.get(code);
+  if (cached && Date.now() - cached.at < 15000) {
+    renderDetailBody(cached.data, local, code);
+    return;
+  }
+
+  $("detail-foot").textContent = "";
+  if (window.__SNAPSHOT__) {
+    // 静态分享页：没有后端可问
+    renderDetailBody(null, local, code);
+    return;
+  }
+
+  $("detail-body").innerHTML =
+    '<div class="detail-loading">正在拉取行情、分时和资金流向…</div>';
+  fetch(`/api/stock?code=${code}`, { cache: "no-store" })
+    .then((response) => {
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return response.json();
+    })
+    .then((data) => {
+      if (detailCode !== code) return;   // 用户已经点开别的股票了
+      detailCache.set(code, { at: Date.now(), data });
+      renderDetailHeader(code, data.quote || local);
+      renderDetailBody(data, local, code);
+    })
+    .catch((error) => {
+      if (detailCode !== code) return;
+      $("detail-body").innerHTML =
+        `<div class="detail-note">详情拉取失败（${esc(error.message)}）。<br />` +
+        "检查一下网络，或者关掉重开试试。</div>";
+    });
+}
+
+function closeDetail() {
+  detailCode = "";
+  $("detail").hidden = true;
+  $("detail-scrim").hidden = true;
+  document.body.classList.remove("drawer-open");
+}
+
+function bindDetail() {
+  $("detail-close").addEventListener("click", closeDetail);
+  $("detail-scrim").addEventListener("click", closeDetail);
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("detail").hidden) closeDetail();
+  });
+  $("detail-follow").addEventListener("click", () => {
+    if (!detailCode) return;
+    toggleFollow(detailCode);
+    updateFollowButton(detailCode);
+  });
+}
+
+function updateFollowButton(code) {
+  const btn = $("detail-follow");
+  const on = isFollowed(code);
+  btn.textContent = on ? "★ 已关注" : "☆ 关注";
+  btn.classList.toggle("on", on);
+}
+
+function renderDetailHeader(code, q) {
+  q = q || {};
+  const d = q.direction || "flat";
+  $("detail-code").textContent = code;
+  $("detail-name").textContent = q.name || "—";
+  $("detail-price").textContent = q.price ? num(q.price) : "—";
+  $("detail-price").className = dirClass(d);
+  const bits = [];
+  if (q.change !== null && q.change !== undefined) bits.push(signed(q.change));
+  if (q.change_pct !== null && q.change_pct !== undefined) bits.push(pct(q.change_pct));
+  $("detail-change").textContent = bits.join("  ") || "—";
+  $("detail-change").className = dirClass(d);
+  $("detail-tags").innerHTML =
+    `<span class="dh-board">${esc(boardName(code))}</span>${stTag(q)}${limitTag(q)}`;
+}
+
+/**
+ * 把「实时行情」和「全市场索引」两边的数据合起来。
+ *
+ * 为什么要合：实时行情接口不提供市盈率、市净率、市值，这几个字段只有全市场
+ * 索引里有。合的时候以实时为准，实时缺的（是 null）才用索引里的补上——
+ * 注意不能简单地 `{...local, ...live}`，那样实时那边的 null 会把索引里的值盖掉。
+ */
+function mergeQuote(live, local) {
+  const merged = { ...(local || {}), ...(live || {}) };
+  ["pe", "pb", "market_cap", "float_cap", "turnover"].forEach((key) => {
+    const fromLive = live ? live[key] : null;
+    if (fromLive === null || fromLive === undefined) {
+      merged[key] = local ? local[key] : null;
+    }
+  });
+  return merged;
+}
+
+/** 把详情渲染进抽屉。``detail`` 为 null 表示拿不到后端数据（静态分享页）。 */
+function renderDetailBody(detail, local, code) {
+  const q = mergeQuote(detail && detail.quote, local);
+  const host = $("detail-body");
+  const blocks = [];
+
+  const kv = (key, value, cls = "") =>
+    `<div class="kv"><span class="k">${esc(key)}</span><span class="v ${cls}">${value}</span></div>`;
+
+  const amplitude =
+    q.high && q.low && q.prev_close
+      ? ((q.high - q.low) / q.prev_close) * 100
+      : null;
+
+  blocks.push(`<div class="detail-block"><h4>关键指标</h4><div class="kv-grid">
+    ${kv("今开", num(q.open))}
+    ${kv("昨收", num(q.prev_close))}
+    ${kv("最高", num(q.high), dirClass(q.direction))}
+    ${kv("最低", num(q.low), dirClass(q.direction))}
+    ${kv("成交量", hands(q.volume))}
+    ${kv("成交额", money(q.amount))}
+    ${kv("换手率", q.turnover !== null && q.turnover !== undefined ? `${q.turnover.toFixed(2)}%` : "—")}
+    ${kv("振幅", amplitude === null ? "—" : `${amplitude.toFixed(2)}%`)}
+    ${kv("市盈率", q.pe !== null && q.pe !== undefined ? q.pe.toFixed(2) : "—")}
+    ${kv("市净率", q.pb !== null && q.pb !== undefined ? q.pb.toFixed(2) : "—")}
+    ${kv("总市值", money(q.market_cap))}
+    ${kv("流通市值", money(q.float_cap))}
+  </div></div>`);
+
+  const canChart = Boolean(detail);
+  blocks.push(`<div class="detail-block"><h4>分时走势</h4>
+    <div class="chart" id="detail-intraday" style="height:220px"></div></div>`);
+  blocks.push(`<div class="detail-block"><h4>日线（近 120 个交易日）</h4>
+    <div class="chart" id="detail-daily" style="height:220px"></div></div>`);
+  blocks.push(`<div class="detail-block"><h4>买卖五档</h4>
+    <div id="detail-orderbook"></div></div>`);
+  blocks.push(`<div class="detail-block"><h4>资金流向（最近 5 个交易日）</h4>
+    <div id="detail-flow"></div></div>`);
+
+  if (!canChart) {
+    blocks.push(`<div class="detail-note">
+      这是静态快照页，只带得动行情和基本面。<br />
+      分时、K 线和五档盘口要在本机跑起服务（双击 <b>start.bat</b>）之后才能看到。
+    </div>`);
+  }
+
+  host.innerHTML = blocks.join("");
+
+  if (canChart) {
+    renderIntradayChart(detail.intraday || [], q);
+    drawLineChart($("detail-daily"), (detail.daily || []).slice(-120), {
+      empty: "没有拿到日线数据。",
+      label: (r) => (r.date || "").slice(5),
+    });
+    $("detail-orderbook").innerHTML = renderOrderbook(detail.orderbook);
+    $("detail-flow").innerHTML = renderFlow(detail.moneyflow || []);
+  } else {
+    const hint = '<div class="detail-note">跑起本地服务后这里会显示。</div>';
+    $("detail-intraday").outerHTML = hint;
+    $("detail-daily").outerHTML = hint;
+    $("detail-orderbook").outerHTML = hint;
+    $("detail-flow").outerHTML = hint;
+  }
+
+  $("detail-foot").textContent = detail
+    ? `数据时间 ${detail.fetched_at || ""} · 点开时才抓取，不进快照`
+    : "静态快照页 · 数据来自内联的全市场索引";
+}
+
+function renderIntradayChart(rows, q) {
+  const host = $("detail-intraday");
+  if (!host) return;
+  // 只画最近一个交易日，否则会把昨天的尾巴也连进来
+  const lastDay = rows.length ? String(rows[rows.length - 1].date || "").slice(0, 10) : "";
+  const today = rows.filter((r) => String(r.date || "").startsWith(lastDay));
+  drawLineChart(host, today, {
+    empty: "没有拿到分时数据。",
+    height: 220,
+    baseline: q.prev_close || null,
+    label: (r) => String(r.date || "").slice(11, 16),
+    tip: (r) => String(r.date || "").slice(11, 16),
+  });
+}
+
+function renderOrderbook(orderbook) {
+  const bids = (orderbook && orderbook.bids) || [];
+  const asks = (orderbook && orderbook.asks) || [];
+  if (!bids.length && !asks.length) {
+    return '<div class="detail-note">没有盘口数据。指数没有五档，停牌时也可能是空的。</div>';
+  }
+  const peak = Math.max(...bids.map((x) => x[1]), ...asks.map((x) => x[1]), 1);
+  const side = (rows, cls, label) =>
+    rows
+      .map(
+        ([price, volume], index) => `<div class="ob-row ${cls}">
+          <span class="ob-bar" style="width:${((volume / peak) * 100).toFixed(1)}%"></span>
+          <span class="lv">${label}${index + 1}</span>
+          <span class="ob-price">${num(price)}</span>
+          <span class="ob-vol">${hands(volume)}</span>
+        </div>`
+      )
+      .join("");
+  return `<div class="orderbook">
+    <div class="ob-side"><div class="ob-title">买盘（价 / 量）</div>${side(bids, "bid", "买")}</div>
+    <div class="ob-side"><div class="ob-title">卖盘（价 / 量）</div>${side(asks, "ask", "卖")}</div>
+  </div>`;
+}
+
+function renderFlow(rows) {
+  if (!rows.length) {
+    return '<div class="detail-note">没有拿到资金流向数据。</div>';
+  }
+  const peak = Math.max(...rows.map((r) => Math.abs(r.main_net || 0)), 1);
+  return `<div class="flow-list">${rows
+    .map((r) => {
+      const net = r.main_net || 0;
+      const up = net >= 0;
+      const width = Math.min((Math.abs(net) / peak) * 50, 50);
+      return `<div class="flow-row">
+        <span class="d">${esc(String(r.date || "").slice(5))}</span>
+        <span class="bar-track">
+          <span class="bar ${up ? "up" : "down"}" style="width:${width.toFixed(1)}%"></span>
+          <span class="mid"></span>
+        </span>
+        <span class="${dirClass(up ? "up" : "down")}">${money(net)}</span>
+        <span class="${dirClass(up ? "up" : "down")}">${pct(r.change_pct)}</span>
+      </div>`;
+    })
+    .join("")}</div>`;
+}
+
+/* ---------------------------------------------------------------- 提示 */
+let toastTimer = 0;
+
+function showToast(text) {
+  const el = $("toast");
+  el.textContent = text;
+  el.hidden = false;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.hidden = true; }, 2200);
+}
+
+/** 点行情卡、关注卡、榜单行都能打开详情。 */
+function bindRowClicks() {
+  const open = (event) => {
+    // 卡片上的按钮有自己的动作（移除关注、加入关注），别抢它们的点击
+    if (event.target.closest(".remove-btn") || event.target.closest(".star-btn")) return;
+    const hit = event.target.closest("[data-code]");
+    if (hit) openDetail(hit.dataset.code);
+  };
+  ["watchlist", "follow-list", "rank-body"].forEach((id) => {
+    const host = $(id);
+    if (host) host.addEventListener("click", open);
+  });
+}
 
 function showLoading() {
   let el = document.getElementById("loading-screen");
@@ -1072,6 +1490,9 @@ if (window.__SNAPSHOT__) {
   updateCountdown();
   bindSearch();
   bindMacroToggle();
+  bindTabs();
+  bindDetail();
+  bindRowClicks();
   renderFollow();
   loadSearchIndex().then(refreshFollowQuotes);
 } else {
@@ -1083,6 +1504,9 @@ if (window.__SNAPSHOT__) {
   }, 1_000);
   bindSearch();
   bindMacroToggle();
+  bindTabs();
+  bindDetail();
+  bindRowClicks();
   renderFollow();
   // 搜索索引跟着全市场快照走（服务端 TTL 4 分钟），5 分钟取一次足够
   loadSearchIndex().then(refreshFollowQuotes);

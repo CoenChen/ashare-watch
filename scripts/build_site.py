@@ -30,6 +30,10 @@ from ashare_watch.store import SnapshotStore  # noqa: E402
 # 一是没必要，二是它会忽略下划线开头的文件，容易踩坑。
 NOJEKYLL = ""
 
+# 本地快照"还算新"的阈值。导出前先看它一眼：如果本地看板刚刚才抓过一整轮，
+# 就没必要再翻 56 页——既慢，又容易和正在运行的看板一起撞进接口限流。
+FRESH_ENOUGH_SECONDS = 300
+
 
 def get_snapshot(*, refresh: bool) -> tuple[dict, str]:
     """返回 ``(快照数据, 来源说明)``。"""
@@ -38,6 +42,11 @@ def get_snapshot(*, refresh: bool) -> tuple[dict, str]:
     store = SnapshotStore(settings.db_path)
 
     if refresh:
+        fresh = store.latest_complete_snapshot(max_age_seconds=FRESH_ENOUGH_SECONDS)
+        if fresh:
+            stamp = fresh.get("fetched_at", "")
+            print(f"[提示] 本地已有 {stamp} 的完整快照，直接复用（省掉一次全市场抓取）")
+            return fresh, f"本地完整快照（{stamp}）"
         try:
             snapshot = Collector(settings=settings, store=store).refresh()
             fresh = snapshot.to_dict()

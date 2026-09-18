@@ -264,6 +264,12 @@ class Settings:
     min_request_interval: float = 0.08
     # 被限流之后的退避时间（秒）。限流窗口通常持续几秒，退避太短没意义。
     rate_limit_backoff: float = 2.5
+    # 整轮刷新被限流之后，暂停多久再来（秒）。
+    # 这一层是给刷新循环用的：单次请求的退避只管几秒，而限流窗口是按请求量
+    # 续期的——继续每 15 秒敲一次，只会让窗口一直续着。宁可停几分钟。
+    rate_limit_cooldown: float = field(
+        default_factory=lambda: float(_env_int("ASHARE_WATCH_RATE_LIMIT_COOLDOWN", 180))
+    )
     page_size: int = 100
 
     # 刷新间隔的硬下限。完整采集（含全市场 56 页）实测 6.4 秒，

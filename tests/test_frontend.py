@@ -35,7 +35,9 @@ def test_every_element_id_looked_up_exists_in_the_markup():
     looked_up = set(re.findall(r'\$\("([A-Za-z0-9_-]+)"\)', APP_JS))
     declared = set(re.findall(r'id="([A-Za-z0-9_-]+)"', INDEX_HTML))
     # 有些 id 是运行时才生成的，不要求出现在静态 HTML 里
-    runtime_only = {"rank-body"}
+    runtime_only = {
+        "detail-daily", "detail-flow", "detail-intraday", "detail-orderbook",
+    }
     missing = sorted(looked_up - declared - runtime_only)
     assert not missing, f"app.js 里查找了不存在的元素：{missing}"
 
@@ -43,3 +45,14 @@ def test_every_element_id_looked_up_exists_in_the_markup():
 def test_follow_panel_is_present_in_the_markup():
     for element_id in ("follow-panel", "follow-list", "follow-count", "follow-clear"):
         assert f'id="{element_id}"' in INDEX_HTML
+
+
+def test_html_comments_are_closed():
+    """注释必须闭合。
+
+    真实踩过的坑：把结尾写成了 ``*/`` 而不是 ``-->``，于是整段标记被当成注释
+    吞掉——元素在文件里明明"存在"，浏览器里却是 null，报错还指向 JS，
+    查起来要绕一大圈。
+    """
+    assert INDEX_HTML.count("<!--") == INDEX_HTML.count("-->")
+    assert "*/" not in INDEX_HTML.split("<script")[0], "HTML 注释应该用 --> 收尾"
