@@ -939,6 +939,26 @@ function quoteFor(code) {
   return followQuotes.get(code) || rowToQuote(searchRowsByCode.get(code)) || null;
 }
 
+/** 在页面内联的快照里找这只股票的完整行情。找不到返回 null。
+ *
+ *  静态分享页没有后端接口可问，但自选股和四个榜单（约 80 只）的完整行情
+ *  本来就内联在页面里，点这些股票时可以直接拿来用。
+ */
+function quoteFromSnapshot(code) {
+  const snap = window.__SNAPSHOT__;
+  if (!snap) return null;
+  const pools = [
+    snap.indexes, snap.watchlist, snap.gainers, snap.losers,
+    snap.most_active, snap.turnover_leaders,
+  ];
+  for (const pool of pools) {
+    for (const item of pool || []) {
+      if (item && item.code === code) return item;
+    }
+  }
+  return null;
+}
+
 /**
  * 把搜索索引的一行（数组）转成和行情一样的扁平结构。
  * 字段顺序见 `derive.build_search_index`：代码、名称、现价、涨跌幅、换手率、
@@ -1074,7 +1094,10 @@ let detailCode = "";
 function openDetail(code) {
   if (!/^\d{6}$/.test(code)) return;
   detailCode = code;
-  const local = rowToQuote(searchRowsByCode.get(code));
+  // 静态分享页没有后端，只能靠页面里已有的数据。快照里本来就带着自选股和
+  // 四个榜单那几十只的完整行情（含今开/最高/最低/成交量），点这些股票时
+  // 可以直接用上，不必只依赖精简索引。
+  const local = mergeQuote(quoteFromSnapshot(code), rowToQuote(searchRowsByCode.get(code)));
 
   $("detail-scrim").hidden = false;
   $("detail").hidden = false;
@@ -1191,22 +1214,40 @@ function renderDetailBody(detail, local, code) {
       ? ((q.high - q.low) / q.prev_close) * 100
       : null;
 
-  blocks.push(`<div class="detail-block"><h4>关键指标</h4><div class="kv-grid">
-    ${kv("今开", num(q.open))}
-    ${kv("昨收", num(q.prev_close))}
-    ${kv("最高", num(q.high), dirClass(q.direction))}
-    ${kv("最低", num(q.low), dirClass(q.direction))}
-    ${kv("成交量", hands(q.volume))}
-    ${kv("成交额", money(q.amount))}
-    ${kv("换手率", q.turnover !== null && q.turnover !== undefined ? `${q.turnover.toFixed(2)}%` : "—")}
-    ${kv("振幅", amplitude === null ? "—" : `${amplitude.toFixed(2)}%`)}
-    ${kv("市盈率", q.pe !== null && q.pe !== undefined ? q.pe.toFixed(2) : "—")}
-    ${kv("市净率", q.pb !== null && q.pb !== undefined ? q.pb.toFixed(2) : "—")}
-    ${kv("总市值", money(q.market_cap))}
-    ${kv("流通市值", money(q.float_cap))}
-  </div></div>`);
-
   const canChart = Boolean(detail);
+  const has = (value) => value !== null && value !== undefined;
+
+  // 静态分享页只带得动索引里的那几项。这里按「有没有数据」决定显示哪些格子，
+  // 而不是先把 12 个格子摆出来、一半是「—」——那样看着就像功能坏了。
+  const cells = [];
+  if (has(q.open)) cells.push(kv("今开", num(q.open)));
+  if (has(q.prev_close)) cells.push(kv("昨收", num(q.prev_close)));
+  if (has(q.high)) cells.push(kv("最高", num(q.high), dirClass(q.direction)));
+  if (has(q.low)) cells.push(kv("最低", num(q.low), dirClass(q.direction)));
+  if (has(q.volume)) cells.push(kv("成交量", hands(q.volume)));
+  cells.push(kv("成交额", money(q.amount)));
+  if (has(q.turnover)) cells.push(kv("换手率", `${q.turnover.toFixed(2)}%`));
+  if (amplitude !== null) cells.push(kv("振幅", `${amplitude.toFixed(2)}%`));
+  cells.push(kv("市盈率", has(q.pe) ? q.pe.toFixed(2) : "—"));
+  cells.push(kv("市净率", has(q.pb) ? q.pb.toFixed(2) : "—"));
+  cells.push(kv("总市值", money(q.market_cap)));
+  cells.push(kv("流通市值", money(q.float_cap)));
+  blocks.push(
+    `<div class="detail-block"><h4>关键指标</h4><div class="kv-grid">${cells.join("")}</div></div>`
+  );
+
+  if (!canChart) {
+    blocks.push(`<div class="detail-note">
+      这是分享出来的<b>行情快照</b>，只带得动行情和基本面。<br />
+      分时、K 线、买卖五档和资金流向要在本机把这个项目跑起来（双击
+      <b>start.bat</b>）才能看到——那些数据是点开股票时才实时抓的，
+      一个单文件网页带不动。
+    </div>`);
+    host.innerHTML = blocks.join("");
+    $("detail-foot").textContent = "静态快照页 · 数据来自内联的全市场索引";
+    return;
+  }
+
   blocks.push(`<div class="detail-block"><h4>分时走势</h4>
     <div class="chart" id="detail-intraday" style="height:220px"></div></div>`);
   blocks.push(`<div class="detail-block"><h4>日线（近 120 个交易日）</h4>
@@ -1216,34 +1257,18 @@ function renderDetailBody(detail, local, code) {
   blocks.push(`<div class="detail-block"><h4>资金流向（最近 5 个交易日）</h4>
     <div id="detail-flow"></div></div>`);
 
-  if (!canChart) {
-    blocks.push(`<div class="detail-note">
-      这是静态快照页，只带得动行情和基本面。<br />
-      分时、K 线和五档盘口要在本机跑起服务（双击 <b>start.bat</b>）之后才能看到。
-    </div>`);
-  }
-
   host.innerHTML = blocks.join("");
 
-  if (canChart) {
-    renderIntradayChart(detail.intraday || [], q);
-    drawLineChart($("detail-daily"), (detail.daily || []).slice(-120), {
-      empty: "没有拿到日线数据。",
-      label: (r) => (r.date || "").slice(5),
-    });
-    $("detail-orderbook").innerHTML = renderOrderbook(detail.orderbook);
-    $("detail-flow").innerHTML = renderFlow(detail.moneyflow || []);
-  } else {
-    const hint = '<div class="detail-note">跑起本地服务后这里会显示。</div>';
-    $("detail-intraday").outerHTML = hint;
-    $("detail-daily").outerHTML = hint;
-    $("detail-orderbook").outerHTML = hint;
-    $("detail-flow").outerHTML = hint;
-  }
+  renderIntradayChart(detail.intraday || [], q);
+  drawLineChart($("detail-daily"), (detail.daily || []).slice(-120), {
+    empty: "没有拿到日线数据。",
+    label: (r) => (r.date || "").slice(5),
+  });
+  $("detail-orderbook").innerHTML = renderOrderbook(detail.orderbook);
+  $("detail-flow").innerHTML = renderFlow(detail.moneyflow || []);
 
-  $("detail-foot").textContent = detail
-    ? `数据时间 ${detail.fetched_at || ""} · 点开时才抓取，不进快照`
-    : "静态快照页 · 数据来自内联的全市场索引";
+  $("detail-foot").textContent =
+    `数据时间 ${detail.fetched_at || ""} · 点开时才抓取，不进快照`;
 }
 
 function renderIntradayChart(rows, q) {
